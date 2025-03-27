@@ -75,7 +75,7 @@ def send_discord(current_source: str):
     try:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         if current_source == BACKUP_SOURCE:
-            payload["content"] = "@everyone"
+            payload["content"] = "@everyone - stream may be down!"
             payload["embeds"][0]["color"] = DISCORD_EMBED_ERROR_COLOR
             payload["embeds"][0]["description"] = (
                 f"⚠️ **WARNING** ⚠️ switching to backup source `{current_source}`. "
