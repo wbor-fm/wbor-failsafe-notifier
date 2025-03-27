@@ -164,6 +164,7 @@ def main():
                 "Source changed from `%s` to `%s`", prev_source, current_source
             )
             send_discord(current_source)
+            send_groupme(current_source)
             prev_state = current_state
             prev_source = current_source
         time.sleep(0.5)
