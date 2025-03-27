@@ -47,10 +47,10 @@ if PRIMARY_SOURCE is None:
     raise ValueError("`BACKUP_INPUT` must be either 'A' or 'B'.")
 
 # Colors (in decimal)
-EMBED_ERROR_COLOR = 16711680  # Red
-EMBED_SUCCESS_COLOR = 65280  # Green
+DISCORD_EMBED_ERROR_COLOR = 16711680  # Red
+DISCORD_EMBED_SUCCESS_COLOR = 65280  # Green
 
-EMBED_PAYLOAD = {
+DISCORD_EMBED_PAYLOAD = {
     "embeds": [
         {
             "title": "Failsafe Gadget - Source Switched",
@@ -65,7 +65,7 @@ EMBED_PAYLOAD = {
 }
 
 
-def send_webhook(current_source: str):
+def send_discord(current_source: str):
     """
     Fire the Discord webhook with a rich embed payload.
 
@@ -73,16 +73,16 @@ def send_webhook(current_source: str):
     indicates backup.
     """
     try:
-        payload = EMBED_PAYLOAD.copy()
+        payload = DISCORD_EMBED_PAYLOAD.copy()
         if current_source == BACKUP_SOURCE:
             payload["content"] = "@everyone"
-            payload["embeds"][0]["color"] = EMBED_ERROR_COLOR
+            payload["embeds"][0]["color"] = DISCORD_EMBED_ERROR_COLOR
             payload["embeds"][0]["description"] = (
                 f"⚠️ **WARNING** ⚠️ switching to backup source `{current_source}`. "
                 "This may indicate a failure in the primary source and should be investigated."
             )
         else:
-            payload["embeds"][0]["color"] = EMBED_SUCCESS_COLOR
+            payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
             payload["embeds"][0][
                 "description"
             ] = f"Switched back to primary source `{current_source}`"
@@ -91,6 +91,37 @@ def send_webhook(current_source: str):
 
         response = requests.post(
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
+        )
+        response.raise_for_status()
+        logging.debug("Discord message sent successfully: `%s`", response.text)
+    except requests.exceptions.Timeout as e:
+        logging.error("Request timed out while sending webhook: `%s`", e)
+    except requests.exceptions.HTTPError as e:
+        logging.error("HTTP error occurred while sending webhook: `%s`", e)
+    except requests.exceptions.ConnectionError as e:
+        logging.error("Connection error occurred while sending webhook: `%s`", e)
+    except requests.exceptions.RequestException as e:
+        logging.error("Failed to send webhook due to a network error: `%s`", e)
+
+
+def send_groupme(current_source: str):
+    """
+    Send a message to a GroupMe group.
+    """
+    try:
+        payload = {
+            "bot_id": config.get("GROUPME_BOT_ID"),
+            "text": f"Stream switched back to primary source `{current_source}`",
+        }
+
+        if current_source == BACKUP_SOURCE:
+            payload["text"] = (
+                f"⚠️ WARNING ⚠️ stream switching to backup source `{current_source}`. "
+                "This may indicate a failure in the primary source and should be investigated!"
+            )
+
+        response = requests.post(
+            config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
         logging.debug("Discord message sent successfully: `%s`", response.text)
@@ -132,7 +163,7 @@ def main():
             logging.info(
                 "Source changed from `%s` to `%s`", prev_source, current_source
             )
-            send_webhook(current_source)
+            send_discord(current_source)
             prev_state = current_state
             prev_source = current_source
         time.sleep(0.5)

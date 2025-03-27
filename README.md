@@ -6,7 +6,7 @@ WBOR uses Angry Audio's [Failsafe Gadget](https://angryaudio.com/failsafegadget/
 
 Ideally, a member of station management should be notified when source B becomes active, as it indicates a failure with the audio console (since it stopped producing a signal). This is where some handy scripting comes in!
 
-On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and a Raspberry Pi, we can read the logic port status in Python. In our case, we want to send a message to a Discord channel when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
+On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and a Raspberry Pi, we can read the logic port status in Python. In our case, we want to send a message to a Discord channel or GroupMe group when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
 
 ![Failsafe Gadget DB9 Pinout](/images/aa-pinout.png)
 
@@ -59,13 +59,13 @@ This script was built using **[Python 3.13.2](https://www.python.org/downloads/)
    cp .env.sample .env
    ```
 
-7. Edit the `.env` file to include your Discord webhook URL and pin assignment. You can find instructions on how to create a Discord webhook [here](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks).
+7. Edit the `.env` file to include your Discord webhook URL/GroupMe bot ID and pin assignment. You can find instructions on how to create a Discord webhook [here](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks), and GroupMe [here](https://dev.groupme.com/bots/new).
 
     ```bash
     nano .env
     ```
 
-    Look for `PIN_ASSIGNMENT` and `DISCORD_WEBHOOK_URL` and update them accordingly. You may also choose to set the BACKUP_INPUT to `A` depending on your setup. The optional variables are provided to help customize the look and feel of the Discord message.
+    Look for `PIN_ASSIGNMENT` and `DISCORD_WEBHOOK_URL` (or `GROUPME_BOT_ID`) and update them accordingly. You may also choose to set the BACKUP_INPUT to`A` depending on your setup. The optional variables are provided to help customize the look and feel of the Discord message.
 
     Once you're done editing, save the file and exit the editor (in nano, press `CTRL + X`, then `Y`, then `ENTER`).
 
@@ -115,4 +115,5 @@ This script was built using **[Python 3.13.2](https://www.python.org/downloads/)
 - [Failsafe Gadget Manual](https://angryaudio.com/wp-content/uploads/2022/08/AA_FailsafeGadgetUserGuide_2208031.pdf)
 - [Discord Webhooks](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
 - [Discord Webhook Embed Object](https://discord.com/developers/docs/resources/message#embed-object)
+- [GroupMe Bots](https://dev.groupme.com/bots/new)
 - [CircuitPython Libraries on any Computer with FT232H](https://learn.adafruit.com/circuitpython-on-any-computer-with-ft232h/)
