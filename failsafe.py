@@ -124,7 +124,7 @@ def send_groupme(current_source: str):
             config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
-        logging.debug("Discord message sent successfully: `%s`", response.text)
+        logging.debug("GroupMe message sent successfully: `%s`", response.text)
     except requests.exceptions.Timeout as e:
         logging.error("Request timed out while sending webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
