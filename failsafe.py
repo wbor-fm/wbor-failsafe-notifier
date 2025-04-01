@@ -22,7 +22,10 @@ import digitalio
 import requests
 from dotenv import dotenv_values
 
-logging.basicConfig(level=logging.INFO)
+from utils.logging import configure_logging
+
+logging.root.handlers = []
+logger = configure_logging()
 
 config = dotenv_values(".env")
 if not config.get("PIN_ASSIGNMENT"):
@@ -86,26 +89,26 @@ def send_email(
             server.login(config.get("SMTP_USERNAME"), config.get("SMTP_PASSWORD"))
             server.sendmail(from_, [to], msg.as_string())
     except smtplib.SMTPRecipientsRefused as e:
-        logging.error("SMTP recipients refused: `%s`", e)
+        logger.error("SMTP recipients refused: `%s`", e)
         send_email(
             subject="Failsafe Gadget - SMTP Recipients Refused",
             body=f"SMTP recipients refused: {e}",
             to=config.get("ERROR_EMAIL"),
         )
     except smtplib.SMTPDataError as e:
-        logging.error("SMTP data error: `%s`", e)
+        logger.error("SMTP data error: `%s`", e)
     except smtplib.SMTPConnectError as e:
-        logging.error("Failed to connect to SMTP server: `%s`", e)
+        logger.error("Failed to connect to SMTP server: `%s`", e)
     except smtplib.SMTPAuthenticationError as e:
-        logging.error("SMTP authentication error: `%s`", e)
+        logger.error("SMTP authentication error: `%s`", e)
     except smtplib.SMTPHeloError as e:
-        logging.error("SMTP HELO error: `%s`", e)
+        logger.error("SMTP HELO error: `%s`", e)
     except smtplib.SMTPServerDisconnected as e:
-        logging.error("SMTP server disconnected: `%s`", e)
+        logger.error("SMTP server disconnected: `%s`", e)
     except smtplib.SMTPException as e:
-        logging.error("SMTP error occurred: `%s`", e)
+        logger.error("SMTP error occurred: `%s`", e)
     except Exception as e:  # pylint: disable=broad-except
-        logging.error("Failed to send email: `%s`", e)
+        logger.error("Failed to send email: `%s`", e)
 
 
 def get_current_playlist() -> dict:
@@ -122,34 +125,34 @@ def get_current_playlist() -> dict:
         if response.json()[0]:
             return response.json()[0]  # First playlist is the current
         else:
-            logging.error("No playlists found in the response.")
+            logger.error("No playlists found in the response.")
             return None
     except requests.exceptions.ConnectionError as e:
-        logging.error("Connection error occurred while fetching playlist: `%s`", e)
+        logger.error("Connection error occurred while fetching playlist: `%s`", e)
         return None
     except requests.exceptions.Timeout as e:
-        logging.error("Request timed out while fetching playlist: `%s`", e)
+        logger.error("Request timed out while fetching playlist: `%s`", e)
         return None
     except requests.exceptions.TooManyRedirects as e:
-        logging.error("Too many redirects while fetching playlist: `%s`", e)
+        logger.error("Too many redirects while fetching playlist: `%s`", e)
         return None
     except requests.exceptions.InvalidURL as e:
-        logging.error("Invalid URL while fetching playlist: `%s`", e)
+        logger.error("Invalid URL while fetching playlist: `%s`", e)
         return None
     except requests.exceptions.HTTPError as e:
-        logging.error("HTTP error occurred while fetching playlist: `%s`", e)
+        logger.error("HTTP error occurred while fetching playlist: `%s`", e)
         return None
     except requests.exceptions.RequestException as e:
-        logging.error("Failed to fetch current playlist: `%s`", e)
+        logger.error("Failed to fetch current playlist: `%s`", e)
         return None
     except IndexError:
-        logging.error("No playlists found in the response.")
+        logger.error("No playlists found in the response.")
         return None
     except ValueError:
-        logging.error("Failed to parse JSON response.")
+        logger.error("Failed to parse JSON response.")
         return None
     except Exception as e:  # pylint: disable=broad-except
-        logging.error("An unexpected error occurred: `%s`", e)
+        logger.error("An unexpected error occurred: `%s`", e)
     return None
 
 
@@ -167,16 +170,16 @@ def get_persona(persona_id: int) -> dict:
         if response.json():
             return response.json()
         else:
-            logging.error("No persona found in the response.")
+            logger.error("No persona found in the response.")
             return None
     except requests.exceptions.RequestException as e:
-        logging.error("Failed to fetch persona: `%s`", e)
+        logger.error("Failed to fetch persona: `%s`", e)
         return None
     except ValueError:
-        logging.error("Failed to parse JSON response.")
+        logger.error("Failed to parse JSON response.")
         return None
     except Exception as e:  # pylint: disable=broad-except
-        logging.error("An unexpected error occurred: `%s`", e)
+        logger.error("An unexpected error occurred: `%s`", e)
     return None
 
 
@@ -220,19 +223,17 @@ def send_discord_email_notification(persona: dict) -> None:
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
         response.raise_for_status()
-        logging.debug("Discord email message sent successfully: `%s`", response.text)
+        logger.debug("Discord email message sent successfully: `%s`", response.text)
     except requests.exceptions.Timeout as e:
-        logging.error("Request timed out while sending Discord email webhook: `%s`", e)
+        logger.error("Request timed out while sending Discord email webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
-        logging.error(
-            "HTTP error occurred while sending Discord email webhook: `%s`", e
-        )
+        logger.error("HTTP error occurred while sending Discord email webhook: `%s`", e)
     except requests.exceptions.ConnectionError as e:
-        logging.error(
+        logger.error(
             "Connection error occurred while sending Discord email webhook: `%s`", e
         )
     except requests.exceptions.RequestException as e:
-        logging.error(
+        logger.error(
             "Failed to send Discord email webhook due to a network error: `%s`", e
         )
 
@@ -271,9 +272,7 @@ def send_discord(current_source: str) -> dict:
             if not is_automation:
                 persona = get_persona(playlist["persona_id"])
                 if not persona:
-                    logging.error(
-                        "Failed to fetch persona for playlist: `%s`", playlist
-                    )
+                    logger.error("Failed to fetch persona for playlist: `%s`", playlist)
                 persona_name = persona["name"] if persona else "Unknown"
                 persona_email = persona["email"] if persona else None
 
@@ -340,7 +339,7 @@ def send_discord(current_source: str) -> dict:
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
         response.raise_for_status()
-        logging.debug("Discord message sent successfully: `%s`", response.text)
+        logger.debug("Discord message sent successfully: `%s`", response.text)
 
         return {
             "playlist": playlist,
@@ -349,13 +348,13 @@ def send_discord(current_source: str) -> dict:
             "string": persona_str,
         }
     except requests.exceptions.Timeout as e:
-        logging.error("Request timed out while sending webhook: `%s`", e)
+        logger.error("Request timed out while sending webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
-        logging.error("HTTP error occurred while sending webhook: `%s`", e)
+        logger.error("HTTP error occurred while sending webhook: `%s`", e)
     except requests.exceptions.ConnectionError as e:
-        logging.error("Connection error occurred while sending webhook: `%s`", e)
+        logger.error("Connection error occurred while sending webhook: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logging.error("Failed to send webhook due to a network error: `%s`", e)
+        logger.error("Failed to send webhook due to a network error: `%s`", e)
     return None
 
 
@@ -401,15 +400,15 @@ def send_groupme(
             config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
-        logging.debug("GroupMe message sent successfully: `%s`", response.text)
+        logger.debug("GroupMe message sent successfully: `%s`", response.text)
     except requests.exceptions.Timeout as e:
-        logging.error("Request timed out while sending webhook: `%s`", e)
+        logger.error("Request timed out while sending webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
-        logging.error("HTTP error occurred while sending webhook: `%s`", e)
+        logger.error("HTTP error occurred while sending webhook: `%s`", e)
     except requests.exceptions.ConnectionError as e:
-        logging.error("Connection error occurred while sending webhook: `%s`", e)
+        logger.error("Connection error occurred while sending webhook: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logging.error("Failed to send webhook due to a network error: `%s`", e)
+        logger.error("Failed to send webhook due to a network error: `%s`", e)
 
 
 def main():
@@ -423,7 +422,7 @@ def main():
     # change.
     prev_state = DIGITAL_PIN.value
     prev_source = PRIMARY_SOURCE if prev_state else BACKUP_SOURCE
-    logging.info(
+    logger.info(
         "%s initial state is %s (input source `%s`)", PIN_NAME, prev_state, prev_source
     )
 
@@ -431,16 +430,14 @@ def main():
     while True:
         current_state = DIGITAL_PIN.value
         current_source = PRIMARY_SOURCE if current_state else BACKUP_SOURCE
-        logging.debug(
+        logger.debug(
             "%s state is %s (input source `%s`)",
             PIN_NAME,
             current_state,
             current_source,
         )
         if current_state != prev_state:
-            logging.info(
-                "Source changed from `%s` to `%s`", prev_source, current_source
-            )
+            logger.info("Source changed from `%s` to `%s`", prev_source, current_source)
             persona = send_discord(current_source)
             send_groupme(current_source)
 
