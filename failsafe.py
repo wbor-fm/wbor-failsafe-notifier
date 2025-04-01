@@ -266,7 +266,7 @@ def send_discord(current_source: str) -> dict:
                 "%Y-%m-%d %H:%M:%S"
             )
 
-            is_automation = playlist.get("automation") is "1"
+            is_automation = playlist.get("automation") == "1"
 
             if not is_automation:
                 persona = get_persona(playlist["persona_id"])

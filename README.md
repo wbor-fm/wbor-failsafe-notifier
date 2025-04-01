@@ -12,12 +12,22 @@ On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monit
 
 If you don't have a Pi with GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our Pi is inside a case. Consequently, our code and instructions will be written with that in mind.
 
+## Notification Options
+
+The script is written to suit our needs, but you can easily modify it to suit your own. By default, it will follow the following logic:
+
+* If the backup source (B) becomes active, we query our [Spinitron API proxy](https://github.com/WBOR-91-1-FM/spinitron-proxy/) to get information about the current playlist and on-air DJ. If this information is available, and we're not currently broadcasting an automation (unattended) playlist, we budle up the info into a Discord embed that is sent to our tech-ops channel so that station technical staff are made aware of the issue.
+  * If the current playlist is NOT automated and we are unable to fetch the email address of the current DJ, we fall back to sending a message to ALL DJs in the DJ-wide GroupMe group. This is done to ensure that someone is made aware of the issue, even if the DJ's email address is not available.
+* Simultaneously, we send a message to the GroupMe group with the same information to the management-wide GroupMe group (that includes non-technical staff members).
+* If an email address was found, we send the DJ an email letting them know that the backup source is active and they should check board's status. This is done using the [smtplib](https://docs.python.org/3/library/smtplib.html) library in Python. The email is sent from the address specified in the `.env` file.
+  * Any time an email is sent, we notify the tech-ops channel in Discord letting them know that an email was sent to the DJ.
+
 ## Hardware
 
-- **Raspberry Pi**: Pretty much any model will work, but we used a Pi 5 for this project since it was already in the studio running other apps.
-- **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use a Raspberry Pi with GPIO pins if you prefer to go in directly, ***but may need to modify the code!***
-- **[DB9 Breakout Connector](https://amazon.com/dp/B09L7JWNDQ)**: This is used to connect to the Failsafe Gadget's logic port.
-- and finally, standard [breadboard jumper wires](https://amazon.com/dp/B07GD2BWPY) to make connections.
+* **Raspberry Pi**: Pretty much any model will work, but we used a Pi 5 for this project since it was already in the studio running other apps.
+* **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use a Raspberry Pi with GPIO pins if you prefer to go in directly, ***but may need to modify the code!***
+* **[DB9 Breakout Connector](https://amazon.com/dp/B09L7JWNDQ)**: This is used to connect to the Failsafe Gadget's logic port.
+* and finally, standard [breadboard jumper wires](https://amazon.com/dp/B07GD2BWPY) to make connections.
 
 ## Usage
 
@@ -111,9 +121,9 @@ This script was built using **[Python 3.13.2](https://www.python.org/downloads/)
 
 ## References
 
-- [Angry Audio Failsafe Gadget](https://angryaudio.com/failsafegadget/)
-- [Failsafe Gadget Manual](https://angryaudio.com/wp-content/uploads/2022/08/AA_FailsafeGadgetUserGuide_2208031.pdf)
-- [Discord Webhooks](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
-- [Discord Webhook Embed Object](https://discord.com/developers/docs/resources/message#embed-object)
-- [GroupMe Bots](https://dev.groupme.com/bots/new)
-- [CircuitPython Libraries on any Computer with FT232H](https://learn.adafruit.com/circuitpython-on-any-computer-with-ft232h/)
+* [Angry Audio Failsafe Gadget](https://angryaudio.com/failsafegadget/)
+* [Failsafe Gadget Manual](https://angryaudio.com/wp-content/uploads/2022/08/AA_FailsafeGadgetUserGuide_2208031.pdf)
+* [Discord Webhooks](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks)
+* [Discord Webhook Embed Object](https://discord.com/developers/docs/resources/message#embed-object)
+* [GroupMe Bots](https://dev.groupme.com/bots/new)
+* [CircuitPython Libraries on any Computer with FT232H](https://learn.adafruit.com/circuitpython-on-any-computer-with-ft232h/)
