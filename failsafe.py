@@ -327,6 +327,12 @@ def send_discord(current_source: str) -> dict:
             )
             if fields:
                 payload["embeds"][0]["fields"] = fields
+            else:
+                payload["embeds"][0]["description"] += (
+                    "No playlist information available. Please check the "
+                    "Spinitron API for more details."
+                )
+                logger.error("No fields")
         else:
             payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
             payload["embeds"][0][
