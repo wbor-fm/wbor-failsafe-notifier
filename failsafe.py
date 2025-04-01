@@ -42,7 +42,8 @@ DIGITAL_PIN = digitalio.DigitalInOut(pin)
 DIGITAL_PIN.switch_to_input()
 
 # Determine primary and backup sources.
-# If BACKUP_INPUT is "A", then primary is "B"; if BACKUP_INPUT is "B", then primary is "A".
+# If BACKUP_INPUT is "A", then primary is "B"; if BACKUP_INPUT is "B",
+# then primary is "A".
 BACKUP_SOURCE = str(config.get("BACKUP_INPUT")).upper()
 PRIMARY_SOURCE = "B" if BACKUP_SOURCE == "A" else "A" if BACKUP_SOURCE == "B" else None
 if PRIMARY_SOURCE is None:
@@ -119,7 +120,7 @@ def get_current_playlist() -> dict:
         response.raise_for_status()
 
         if response.json()[0]:
-            return response.json()[0]  # Assuming the first playlist is the current one
+            return response.json()[0]  # First playlist is the current
         else:
             logging.error("No playlists found in the response.")
             return None
@@ -187,24 +188,28 @@ def send_discord_email_notification(persona: dict) -> None:
     try:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
-        fields.append(
-            {
-                "name": "Current Playlist",
-                "value": persona["playlist"],
-            },
-            {
-                "name": "DJ",
-                "value": persona["string"],
-            },
-        )
+
+        if persona["playlist"]:
+            fields.append(
+                {
+                    "name": "Current Playlist",
+                    "value": persona["playlist"],
+                },
+            )
+        if persona["string"]:
+            fields.append(
+                {
+                    "name": "DJ",
+                    "value": persona["string"],
+                },
+            )
 
         payload["embeds"][0]["title"] = "Failsafe Gadget - Email Sent"
         payload["embeds"][0]["color"] = DISCORD_EMBED_WARNING_COLOR
         payload["embeds"][0]["description"] = (
-            f"Email sent to DJ `{persona["name"]}` at `{persona["email"]}` "
-            "regarding backup source activation."
-            "Please check if the DJ is aware of the backup source "
-            "activation and if they need assistance."
+            f"Email sent to `{persona["email"]}` regarding backup "
+            "source activation. Please check if the DJ is aware of the "
+            "backup source activation and if they need assistance."
         )
         if fields:
             payload["embeds"][0]["fields"] = fields
@@ -239,16 +244,19 @@ def send_discord(current_source: str) -> dict:
     The embed's color and description change based on whether the state
     indicates backup.
 
-    Returns the email address of the current DJ persona, if available.
+    Returns dict with info about the current playlist and DJ.
     """
     try:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
+
         playlist = get_current_playlist()
+
         persona = None
         persona_name = None
         persona_email = None
         persona_str = None
+
         if playlist:
             # Convert the start and end times to a more readable format
             start_time = datetime.fromisoformat(playlist["start"]).strftime(
@@ -257,32 +265,36 @@ def send_discord(current_source: str) -> dict:
             end_time = datetime.fromisoformat(playlist["end"]).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            persona = get_persona(playlist["persona_id"])
-            if not persona:
-                logging.error("Failed to fetch persona for playlist: `%s`", playlist)
 
-            persona_name = persona["name"] if persona else "Unknown"
-            persona_email = persona["email"] if persona else None
+            is_automation = playlist.get("automation") is "1"
 
-            persona_str = None
-            if persona_email:
-                persona_str = f"[{persona_name}](mailto:{persona_email})"
-            else:
-                logging.warning("Persona email not found for `%s`", persona_name)
-                persona_str = persona_name
+            if not is_automation:
+                persona = get_persona(playlist["persona_id"])
+                if not persona:
+                    logging.error(
+                        "Failed to fetch persona for playlist: `%s`", playlist
+                    )
+                persona_name = persona["name"] if persona else "Unknown"
+                persona_email = persona["email"] if persona else None
 
-                # TODO:
-                # At this point, we should see if the show has any other
-                # personas associated with it and attempt to get their
-                # email address.
+                persona_str = None
+                if persona_email:
+                    persona_str = f"[{persona_name}](mailto:{persona_email})"
+                else:
+                    persona_str = persona_name
 
-                # If we can't find one, we should send a message to the
-                # DJ-wide GroupMe group.
-                send_groupme(
-                    current_source,
-                    public=True,
-                    bot_id=config.get("GROUPME_BOT_ID_DJ"),
-                )
+                    # TODO:
+                    # At this point, we should see if the show has any
+                    # other personas associated with it and attempt to
+                    # get their email address instead.
+
+                    # If we can't find one, we should send a message to
+                    # the DJ-wide GroupMe group.
+                    send_groupme(
+                        current_source,
+                        public=True,
+                        bot_id=config.get("GROUPME_BOT_ID_DJ"),
+                    )
 
             fields.append(
                 {
@@ -330,12 +342,11 @@ def send_discord(current_source: str) -> dict:
         response.raise_for_status()
         logging.debug("Discord message sent successfully: `%s`", response.text)
 
-        # Return all persona info
         return {
+            "playlist": playlist,
             "name": persona_name,
             "email": persona_email,
             "string": persona_str,
-            "playlist": playlist,
         }
     except requests.exceptions.Timeout as e:
         logging.error("Request timed out while sending webhook: `%s`", e)
@@ -408,7 +419,8 @@ def main():
     Log the state changes and send a Discord webhook with the
     appropriate embed payload.
     """
-    # Track the previous state so we only send the webhook on a state change.
+    # Track the previous state so we only send the webhook on a state
+    # change.
     prev_state = DIGITAL_PIN.value
     prev_source = PRIMARY_SOURCE if prev_state else BACKUP_SOURCE
     logging.info(
