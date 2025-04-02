@@ -11,7 +11,6 @@ Changelog:
     - 1.0.0 (2025-03-22): Initial release.
 """
 
-import json
 import logging
 import smtplib
 import time
@@ -202,23 +201,23 @@ def send_discord_email_notification(persona: dict) -> None:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
 
-        # Ensure the playlist value is a string.
-        if persona.get("playlist"):
-            playlist = persona["playlist"]
-            if isinstance(playlist, (tuple, list)):
-                # Join all parts if it's a tuple or list.
-                playlist = "".join(playlist)
-            fields.append(
-                {
-                    "name": "Current Playlist",
-                    "value": playlist,
-                }
-            )
         if persona.get("string"):
             fields.append(
                 {
                     "name": "DJ",
                     "value": persona["string"],
+                }
+            )
+
+        if persona.get("playlist"):
+            playlist = persona["playlist"]
+            fields.append(
+                {
+                    "name": "Playlist",
+                    "value": (
+                        f"[{playlist['title']}](https://api-1.wbor.org"
+                        f"/api/playlists/{playlist['id']})"
+                    ),
                 }
             )
 
@@ -239,7 +238,7 @@ def send_discord_email_notification(persona: dict) -> None:
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
         response.raise_for_status()
-        logger.debug("Discord email message sent successfully: `%s`", response.text)
+        logger.debug("Discord email message sent successfully")
     except requests.exceptions.Timeout as e:
         logger.error("Request timed out while sending Discord email webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
@@ -317,8 +316,11 @@ def send_discord(current_source: str) -> dict:
             fields.extend(
                 [
                     {
-                        "name": "Name",
-                        "value": f"[{playlist['title']}]({playlist['_links']['self']['href']})",
+                        "name": "Playlist",
+                        "value": (
+                            f"[{playlist['title']}](https://api-1.wbor"
+                            f".org/api/playlists/{playlist['id']})"
+                        ),
                     },
                     {
                         "name": "DJ",
