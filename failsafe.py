@@ -307,7 +307,7 @@ def send_discord(current_source: str) -> dict:
                 [
                     {
                         "name": "Name",
-                        "value": f"[{playlist['title']}]({playlist['_links']['show']['href']})",
+                        "value": f"[{playlist['title']}]({playlist['_links']['self']['href']})",
                     },
                     {
                         "name": "DJ",
@@ -337,6 +337,7 @@ def send_discord(current_source: str) -> dict:
             )
             if fields:
                 payload["embeds"][0]["fields"] = fields
+                logger.debug("send_discord() Fields: `%s`", fields)
             else:
                 payload["embeds"][0]["description"] += (
                     "\n\nNo playlist information available. Please "
@@ -459,7 +460,7 @@ def main():
 
             # If we're switching to backup, attempt to send an email to
             # the DJ who is currently on air.
-            if persona["email"] and current_source == BACKUP_SOURCE:
+            if persona and persona.get("email") and current_source == BACKUP_SOURCE:
                 send_email(
                     subject="ATTN: Failsafe Activated, Action Required",
                     body=(
