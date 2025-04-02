@@ -189,6 +189,10 @@ def get_persona(persona_id: int) -> dict:
     return None
 
 
+import json
+from datetime import datetime, timezone
+
+
 def send_discord_email_notification(persona: dict) -> None:
     """
     Fire the Discord webhook with a rich embed payload notifying MGMT
@@ -198,25 +202,32 @@ def send_discord_email_notification(persona: dict) -> None:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
 
+        # Ensure the playlist value is a string.
         if persona.get("playlist"):
+            playlist = persona["playlist"]
+            if isinstance(playlist, (tuple, list)):
+                # Join all parts if it's a tuple or list.
+                playlist = "".join(playlist)
             fields.append(
                 {
                     "name": "Current Playlist",
-                    "value": (
-                        f"[{persona['playlist']['title']}]"
-                        f"({persona['playlist']['_links']['self']['href']})",
-                    ),
+                    "value": playlist,
                 }
             )
         if persona.get("string"):
-            fields.append({"name": "DJ", "value": persona["string"]})
+            fields.append(
+                {
+                    "name": "DJ",
+                    "value": persona["string"],
+                }
+            )
 
         payload["embeds"][0]["title"] = "Failsafe Gadget - Email Sent"
         payload["embeds"][0]["color"] = DISCORD_EMBED_WARNING_COLOR
         payload["embeds"][0]["description"] = (
             f"Email sent to `{persona['email']}` regarding backup "
-            "source activation. Please check if the DJ is aware of the "
-            "backup source activation and if they need assistance."
+            "source activation. Please check if the DJ is aware of the"
+            " backup source activation and if they need assistance."
         )
         if fields:
             payload["embeds"][0]["fields"] = fields
