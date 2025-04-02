@@ -121,10 +121,13 @@ def get_current_playlist() -> dict:
             f"{config.get('SPINITRON_API_BASE_URL')}/playlists", timeout=5
         )
         response.raise_for_status()
-        if response.json()[0]:
-            logger.debug("Current playlist: `%s`", response.json()[0])
-            return response.json()[0]  # First playlist is the current
-        logger.error("No playlists found in the response.")
+        data = response.json()
+        items = data.get("items", [])
+        if items:
+            playlist = items[0]
+            logger.debug("Current playlist: `%s`", playlist)
+            return playlist
+        logger.error("No playlist items found in the response: `%s`", data)
         return None
     except requests.exceptions.ConnectionError as e:
         logger.error("Connection error occurred while fetching playlist: `%s`", e)
@@ -350,7 +353,7 @@ def send_discord(current_source: str) -> dict:
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
         response.raise_for_status()
-        logger.debug("Discord message sent successfully: `%s`", response.text)
+        logger.debug("Discord message sent successfully")
 
         return {
             "playlist": playlist,
@@ -411,7 +414,7 @@ def send_groupme(
             config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
-        logger.debug("GroupMe message sent successfully: `%s`", response.text)
+        logger.debug("GroupMe message sent successfully")
     except requests.exceptions.Timeout as e:
         logger.error("Request timed out while sending webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
