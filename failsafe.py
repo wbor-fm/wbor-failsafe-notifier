@@ -303,25 +303,27 @@ def send_discord(current_source: str) -> dict:
                         bot_id=config.get("GROUPME_BOT_ID_DJ"),
                     )
 
-            fields.append(
-                {
-                    "name": "Name",
-                    "value": f"[{playlist['title']}]({playlist['_links']['show']['href']})",
-                },
-                {
-                    "name": "DJ",
-                    "value": persona_str,
-                },
-                {
-                    "name": "Start",
-                    "value": start_time,
-                    "inline": True,
-                },
-                {
-                    "name": "End",
-                    "value": end_time,
-                    "inline": True,
-                },
+            fields.extend(
+                [
+                    {
+                        "name": "Name",
+                        "value": f"[{playlist['title']}]({playlist['_links']['show']['href']})",
+                    },
+                    {
+                        "name": "DJ",
+                        "value": persona_str,
+                    },
+                    {
+                        "name": "Start",
+                        "value": start_time,
+                        "inline": True,
+                    },
+                    {
+                        "name": "End",
+                        "value": end_time,
+                        "inline": True,
+                    },
+                ]
             )
 
         if current_source == BACKUP_SOURCE:
