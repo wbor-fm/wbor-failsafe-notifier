@@ -11,6 +11,7 @@ Changelog:
     - 1.0.0 (2025-03-22): Initial release.
 """
 
+import json
 import logging
 import smtplib
 import time
@@ -197,30 +198,29 @@ def send_discord_email_notification(persona: dict) -> None:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
 
-        if persona["playlist"]:
+        if persona.get("playlist"):
             fields.append(
                 {
                     "name": "Current Playlist",
-                    "value": persona["playlist"],
-                },
+                    "value": (
+                        f"[{persona['playlist']['title']}]"
+                        f"({persona['playlist']['_links']['self']['href']})",
+                    ),
+                }
             )
-        if persona["string"]:
-            fields.append(
-                {
-                    "name": "DJ",
-                    "value": persona["string"],
-                },
-            )
+        if persona.get("string"):
+            fields.append({"name": "DJ", "value": persona["string"]})
 
         payload["embeds"][0]["title"] = "Failsafe Gadget - Email Sent"
         payload["embeds"][0]["color"] = DISCORD_EMBED_WARNING_COLOR
         payload["embeds"][0]["description"] = (
-            f"Email sent to `{persona["email"]}` regarding backup "
+            f"Email sent to `{persona['email']}` regarding backup "
             "source activation. Please check if the DJ is aware of the "
             "backup source activation and if they need assistance."
         )
         if fields:
             payload["embeds"][0]["fields"] = fields
+            logger.debug("send_discord_email_notification() Fields: `%s`", fields)
 
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
 
