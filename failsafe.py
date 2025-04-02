@@ -115,18 +115,17 @@ def get_current_playlist() -> dict:
     """
     Get the current playlist from Spinitron API.
     """
-
+    logger.debug("Fetching current playlist from Spinitron API...")
     try:
         response = requests.get(
             f"{config.get('SPINITRON_API_BASE_URL')}/playlists", timeout=5
         )
         response.raise_for_status()
-
         if response.json()[0]:
+            logger.debug("Current playlist: `%s`", response.json()[0])
             return response.json()[0]  # First playlist is the current
-        else:
-            logger.error("No playlists found in the response.")
-            return None
+        logger.error("No playlists found in the response.")
+        return None
     except requests.exceptions.ConnectionError as e:
         logger.error("Connection error occurred while fetching playlist: `%s`", e)
         return None
@@ -152,7 +151,9 @@ def get_current_playlist() -> dict:
         logger.error("Failed to parse JSON response.")
         return None
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("An unexpected error occurred: `%s`", e)
+        logger.error(
+            "An unexpected error occurred while getting the current playlist: `%s`", e
+        )
     return None
 
 
@@ -160,18 +161,17 @@ def get_persona(persona_id: int) -> dict:
     """
     Get the persona from Spinitron API.
     """
-
+    logger.debug("Fetching persona from Spinitron API...")
     try:
         response = requests.get(
             f"{config.get('SPINITRON_API_BASE_URL')}/personas/{persona_id}", timeout=5
         )
         response.raise_for_status()
-
         if response.json():
+            logger.debug("Persona: `%s`", response.json())
             return response.json()
-        else:
-            logger.error("No persona found in the response.")
-            return None
+        logger.error("No persona found in the response.")
+        return None
     except requests.exceptions.RequestException as e:
         logger.error("Failed to fetch persona: `%s`", e)
         return None
@@ -179,7 +179,9 @@ def get_persona(persona_id: int) -> dict:
         logger.error("Failed to parse JSON response.")
         return None
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("An unexpected error occurred: `%s`", e)
+        logger.error(
+            "An unexpected error occurred while getting the current persona: `%s`", e
+        )
     return None
 
 
@@ -269,6 +271,9 @@ def send_discord(current_source: str) -> dict:
 
             is_automation = playlist.get("automation") == "1"
 
+            logger.debug("Playlist: `%s`", playlist)
+            logger.debug("Is automation: `%s`", is_automation)
+
             if not is_automation:
                 persona = get_persona(playlist["persona_id"])
                 if not persona:
@@ -329,10 +334,10 @@ def send_discord(current_source: str) -> dict:
                 payload["embeds"][0]["fields"] = fields
             else:
                 payload["embeds"][0]["description"] += (
-                    "No playlist information available. Please check the "
-                    "Spinitron API for more details."
+                    "\n\nNo playlist information available. Please "
+                    "check the Spinitron API for more details."
                 )
-                logger.error("No fields")
+                logger.warning("No Spinitron fields found!")
         else:
             payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
             payload["embeds"][0][
@@ -436,12 +441,12 @@ def main():
     while True:
         current_state = DIGITAL_PIN.value
         current_source = PRIMARY_SOURCE if current_state else BACKUP_SOURCE
-        logger.debug(
-            "%s state is %s (input source `%s`)",
-            PIN_NAME,
-            current_state,
-            current_source,
-        )
+        # logger.debug(
+        #     "%s state is %s (input source `%s`)",
+        #     PIN_NAME,
+        #     current_state,
+        #     current_source,
+        # )
         if current_state != prev_state:
             logger.info("Source changed from `%s` to `%s`", prev_source, current_source)
             persona = send_discord(current_source)
