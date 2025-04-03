@@ -188,10 +188,6 @@ def get_persona(persona_id: int) -> dict:
     return None
 
 
-import json
-from datetime import datetime, timezone
-
-
 def send_discord_email_notification(persona: dict) -> None:
     """
     Fire the Discord webhook with a rich embed payload notifying MGMT
