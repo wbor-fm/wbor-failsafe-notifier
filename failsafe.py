@@ -428,8 +428,6 @@ def send_discord(current_source: str) -> dict:
             payload["embeds"][0]["description"] = (
                 f"⚠️ **WARNING** ⚠️ switching to backup source `{current_source}`. "
                 "This may indicate a failure in the primary source and should be investigated."
-                "\n\n"
-                "Information about the current playlist is below. "
             )
             if fields:
                 payload["embeds"][0]["fields"] = fields
