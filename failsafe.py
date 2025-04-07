@@ -160,6 +160,65 @@ def get_current_playlist() -> dict:
     return None
 
 
+def get_show(show_id: int) -> dict:
+    """
+    Get the show from Spinitron API.
+    """
+    logger.debug("Fetching show from Spinitron API...")
+    try:
+        response = requests.get(f"{SPINITRON_API_BASE_URL}/shows/{show_id}", timeout=5)
+        response.raise_for_status()
+        if response.json():
+            logger.debug("Show: `%s`", response.json())
+            return response.json()
+        logger.error("No show found in the response.")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error("Failed to fetch show: `%s`", e)
+        return None
+    except ValueError:
+        logger.error("Failed to parse JSON response.")
+        return None
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error(
+            "An unexpected error occurred while getting the current show: `%s`", e
+        )
+    return None
+
+
+def get_show_persona_ids(show: dict) -> list:
+    """
+    Get the personas associated with a show from Spinitron API.
+    """
+    try:
+        personas = show["_links"].get("personas", [])
+        if personas:
+            # Example:
+            # 0:
+            # {href: "https://api-1.wbor.org/api/personas/182717"}
+
+            # Extract the IDs from the hrefs
+            persona_ids = [int(p["href"].split("/")[-1]) for p in personas]
+            logger.debug("Show personas: `%s`", persona_ids)
+            return persona_ids
+        logger.error("No personas found in the show response.")
+        return []
+    except KeyError:
+        logger.error("KeyError while getting show personas.")
+        return []
+    except ValueError:
+        logger.error("ValueError while getting show personas.")
+        return []
+    except TypeError:
+        logger.error("TypeError while getting show personas.")
+        return []
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error(
+            "An unexpected error occurred while getting the show personas: `%s`", e
+        )
+    return []
+
+
 def get_persona(persona_id: int) -> dict:
     """
     Get the persona from Spinitron API.
@@ -302,13 +361,40 @@ def send_discord(current_source: str) -> dict:
                     # other personas associated with it and attempt to
                     # get their email address instead.
 
+                    show_id = playlist.get("show_id")
+                    show = get_show(show_id)
+                    found_email = False
+                    if show:
+                        prev_persona_id = persona_id
+                        persona_ids = get_show_persona_ids(show)
+                        if persona_ids:
+                            # Iterate through the persona IDs excluding
+                            # the current one to find an email address
+                            for pid in persona_ids:
+                                if pid != prev_persona_id:
+                                    persona = get_persona(pid)
+                                    if persona and persona.get("email"):
+                                        persona_email = persona["email"]
+                                        persona_str = (
+                                            f"[{persona['name']}]"
+                                            f"(mailto:{persona_email})"
+                                        )
+                                        found_email = True
+                                        break
+
                     # If we can't find one, we should send a message to
                     # the DJ-wide GroupMe group.
-                    send_groupme(
-                        current_source,
-                        public=True,
-                        bot_id=config.get("GROUPME_BOT_ID_DJ"),
-                    )
+                    if not found_email:
+                        logger.warning(
+                            "No email address found for DJ `%s` - "
+                            "sending message to DJ GroupMe group",
+                            persona_name,
+                        )
+                        send_groupme(
+                            current_source,
+                            public=True,
+                            bot_id=config.get("GROUPME_BOT_ID_DJ"),
+                        )
 
             fields.extend(
                 [
