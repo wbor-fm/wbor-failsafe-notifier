@@ -361,26 +361,27 @@ def send_discord(current_source: str) -> dict:
                     # other personas associated with it and attempt to
                     # get their email address instead.
 
-                    show_id = playlist.get("show_id")
-                    show = get_show(show_id)
                     found_email = False
-                    if show:
-                        prev_persona_id = persona_id
-                        persona_ids = get_show_persona_ids(show)
-                        if persona_ids:
-                            # Iterate through the persona IDs excluding
-                            # the current one to find an email address
-                            for pid in persona_ids:
-                                if pid != prev_persona_id:
-                                    persona = get_persona(pid)
-                                    if persona and persona.get("email"):
-                                        persona_email = persona["email"]
-                                        persona_str = (
-                                            f"[{persona['name']}]"
-                                            f"(mailto:{persona_email})"
-                                        )
-                                        found_email = True
-                                        break
+                    show_id = playlist.get("show_id")
+                    if show_id:
+                        show = get_show(show_id)
+                        if show:
+                            prev_persona_id = persona_id
+                            persona_ids = get_show_persona_ids(show)
+                            if persona_ids:
+                                # Iterate through the persona IDs excluding
+                                # the current one to find an email address
+                                for pid in persona_ids:
+                                    if pid != prev_persona_id:
+                                        persona = get_persona(pid)
+                                        if persona and persona.get("email"):
+                                            persona_email = persona["email"]
+                                            persona_str = (
+                                                f"[{persona['name']}]"
+                                                f"(mailto:{persona_email})"
+                                            )
+                                            found_email = True
+                                            break
 
                     # If we can't find one, we should send a message to
                     # the DJ-wide GroupMe group.
@@ -393,7 +394,7 @@ def send_discord(current_source: str) -> dict:
                         send_groupme(
                             current_source,
                             public=True,
-                            bot_id=config.get("GROUPME_BOT_ID_DJ"),
+                            bot_id=config.get("GROUPME_BOT_ID_DJS"),
                         )
 
             fields.extend(
