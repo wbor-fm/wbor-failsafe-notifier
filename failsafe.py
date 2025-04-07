@@ -213,6 +213,7 @@ def resolve_persona(playlist: dict, current_source: str) -> tuple:
     Returns a tuple (persona_id, persona_name, persona_email,
     persona_str).
     """
+    # Get the primary persona details.
     persona = get_persona(playlist["persona_id"])
     if persona:
         pid = persona.get("id")
@@ -222,26 +223,41 @@ def resolve_persona(playlist: dict, current_source: str) -> tuple:
     else:
         pid, name, email, pstr = None, "Unknown", None, "Unknown"
 
+    # If we already have an email, return early.
+    if email:
+        return pid, name, email, pstr
+
+    # Try to resolve an alternative persona email using the show's
+    # personas.
+    show_id = playlist.get("show_id")
+    if show_id:
+        show = get_show(show_id)
+        if show:
+            alt_ids = [
+                alt_pid for alt_pid in get_show_persona_ids(show) if alt_pid != pid
+            ]
+            for alt_pid in alt_ids:
+                alt_persona = get_persona(alt_pid)
+                if alt_persona:
+                    alt_email = alt_persona.get("email")
+                    if alt_email:
+                        email = alt_email
+                        pstr = f"[{alt_persona.get('name', 'Unknown')}](mailto:{email})"
+                        break
+
     if not email:
-        show_id = playlist.get("show_id")
-        if show_id:
-            show = get_show(show_id)
-            if show:
-                for alt_pid in get_show_persona_ids(show):
-                    if alt_pid != pid:
-                        alt_persona = get_persona(alt_pid)
-                        if alt_persona and alt_persona.get("email"):
-                            email = alt_persona["email"]
-                            pstr = f"[{alt_persona['name']}](mailto:{email})"
-                            break
-        if not email:
-            logger.warning(
-                "No email address found for DJ `%s` - sending message to DJ GroupMe group",
-                name,
-            )
+        logger.warning(
+            "No email address found for DJ %s - sending message to DJ GroupMe group",
+            name,
+        )
+
+        # Only GroupMe when switching to backup source, not when
+        # switching back to primary.
+        if current_source == BACKUP_SOURCE:
             send_groupme(
                 current_source, public=True, bot_id=config.get("GROUPME_BOT_ID_DJS")
             )
+
     return pid, name, email, pstr
 
 
@@ -362,7 +378,8 @@ def send_groupme(
                     "The audio console in the studio has switched to "
                     "the backup source due to a failure. "
                     "Double-check that you are broadcasting; if in "
-                    "doubt, turn the automation input on.\n\n"
+                    "doubt, turn the automation input on and make sure "
+                    "that the volume slider is up.\n\n"
                     "If the automating input isn't working, find a "
                     "radio safe playlist or CD to loop. Do not leave "
                     "until management is contacted."
@@ -423,7 +440,7 @@ def main():
                 # Notify MGMT that an email was sent to the DJ.
                 send_discord_email_notification(persona)
 
-            # If an email wasn't found, send_discord already handles
+            # If an email wasn't found, send_discord() already handles
             # sending a message to the DJ group.
 
             # Update state
