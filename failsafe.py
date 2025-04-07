@@ -71,6 +71,8 @@ DISCORD_EMBED_PAYLOAD = {
     ],
 }
 
+SPINITRON_API_BASE_URL = config.get("SPINITRON_API_BASE_URL")
+
 
 def send_email(
     subject: str, body: str, to: str, from_: str = config.get("FROM_EMAIL")
@@ -117,9 +119,7 @@ def get_current_playlist() -> dict:
     """
     logger.debug("Fetching current playlist from Spinitron API...")
     try:
-        response = requests.get(
-            f"{config.get('SPINITRON_API_BASE_URL')}/playlists", timeout=5
-        )
+        response = requests.get(f"{SPINITRON_API_BASE_URL}/playlists", timeout=5)
         response.raise_for_status()
         data = response.json()
         items = data.get("items", [])
@@ -167,7 +167,7 @@ def get_persona(persona_id: int) -> dict:
     logger.debug("Fetching persona from Spinitron API...")
     try:
         response = requests.get(
-            f"{config.get('SPINITRON_API_BASE_URL')}/personas/{persona_id}", timeout=5
+            f"{SPINITRON_API_BASE_URL}/personas/{persona_id}", timeout=5
         )
         response.raise_for_status()
         if response.json():
@@ -211,8 +211,8 @@ def send_discord_email_notification(persona: dict) -> None:
                 {
                     "name": "Playlist",
                     "value": (
-                        f"[{playlist['title']}](https://api-1.wbor.org"
-                        f"/api/playlists/{playlist['id']})"
+                        f"[{playlist['title']}]({SPINITRON_API_BASE_URL}"
+                        f"/playlists/{playlist['id']})"
                     ),
                 }
             )
@@ -265,6 +265,7 @@ def send_discord(current_source: str) -> dict:
         playlist = get_current_playlist()
 
         persona = None
+        persona_id = None
         persona_name = None
         persona_email = None
         persona_str = None
@@ -285,8 +286,7 @@ def send_discord(current_source: str) -> dict:
 
             if not is_automation:
                 persona = get_persona(playlist["persona_id"])
-                if not persona:
-                    logger.error("Failed to fetch persona for playlist: `%s`", playlist)
+                persona_id = persona["id"] if persona else None
                 persona_name = persona["name"] if persona else "Unknown"
                 persona_email = persona["email"] if persona else None
 
@@ -294,6 +294,7 @@ def send_discord(current_source: str) -> dict:
                 if persona_email:
                     persona_str = f"[{persona_name}](mailto:{persona_email})"
                 else:
+                    # No email address found in the persona
                     persona_str = persona_name
 
                     # TODO:
@@ -314,13 +315,13 @@ def send_discord(current_source: str) -> dict:
                     {
                         "name": "Playlist",
                         "value": (
-                            f"[{playlist['title']}](https://api-1.wbor"
-                            f".org/api/playlists/{playlist['id']})"
+                            f"[{playlist['title']}]({SPINITRON_API_BASE_URL}"
+                            f"/playlists/{playlist['id']})"
                         ),
                     },
                     {
                         "name": "DJ",
-                        "value": persona_str,
+                        "value": f"[{persona_str}]({SPINITRON_API_BASE_URL}/personas/{persona_id})",
                     },
                     {
                         "name": "Start",
@@ -374,13 +375,13 @@ def send_discord(current_source: str) -> dict:
             "string": persona_str,
         }
     except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while sending webhook: `%s`", e)
+        logger.error("Request timed out while sending Discord webhook: `%s`", e)
     except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while sending webhook: `%s`", e)
+        logger.error("HTTP error occurred while sending Discord webhook: `%s`", e)
     except requests.exceptions.ConnectionError as e:
-        logger.error("Connection error occurred while sending webhook: `%s`", e)
+        logger.error("Connection error occurred while sending Discord webhook: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logger.error("Failed to send webhook due to a network error: `%s`", e)
+        logger.error("Failed to send Discord webhook due to a network error: `%s`", e)
     return None
 
 
@@ -422,19 +423,20 @@ def send_groupme(
                 " management at wbor@bowdoin.edu"
             )
 
+        logger.debug("Sending GroupMe payload: `%s`", payload)
         response = requests.post(
             config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
         logger.debug("GroupMe message sent successfully")
     except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while sending webhook: `%s`", e)
+        logger.error("Request timed out while sending GroupMe message: `%s`", e)
     except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while sending webhook: `%s`", e)
+        logger.error("HTTP error occurred while sending GroupMe message: `%s`", e)
     except requests.exceptions.ConnectionError as e:
-        logger.error("Connection error occurred while sending webhook: `%s`", e)
+        logger.error("Connection error occurred while sending GroupMe message: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logger.error("Failed to send webhook due to a network error: `%s`", e)
+        logger.error("Failed to send GroupMe message due to a network error: `%s`", e)
 
 
 def main():
