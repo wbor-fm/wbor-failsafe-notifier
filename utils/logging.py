@@ -53,5 +53,4 @@ def configure_logging(logger_name: str = "wbor_failsafe_notifier") -> logging.Lo
     )
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-
     return logger

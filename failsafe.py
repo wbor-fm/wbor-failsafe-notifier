@@ -73,6 +73,26 @@ DISCORD_EMBED_PAYLOAD = {
 
 SPINITRON_API_BASE_URL = config.get("SPINITRON_API_BASE_URL")
 
+# Helper function for API GET requests
+
+
+def api_get(endpoint: str) -> dict:
+    """
+    Make a GET request to the Spinitron API and return the JSON
+    response.
+    """
+    url = f"{SPINITRON_API_BASE_URL}{endpoint}"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error("Error fetching `%s`: `%s`", url, e)
+        return None
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error("Unexpected error fetching `%s`: `%s`", url, e)
+        return None
+
 
 def send_email(
     subject: str, body: str, to: str, from_: str = config.get("FROM_EMAIL")
@@ -97,66 +117,23 @@ def send_email(
             body=f"SMTP recipients refused: {e}",
             to=config.get("ERROR_EMAIL"),
         )
-    except smtplib.SMTPDataError as e:
-        logger.error("SMTP data error: `%s`", e)
-    except smtplib.SMTPConnectError as e:
-        logger.error("Failed to connect to SMTP server: `%s`", e)
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error("SMTP authentication error: `%s`", e)
-    except smtplib.SMTPHeloError as e:
-        logger.error("SMTP HELO error: `%s`", e)
-    except smtplib.SMTPServerDisconnected as e:
-        logger.error("SMTP server disconnected: `%s`", e)
-    except smtplib.SMTPException as e:
-        logger.error("SMTP error occurred: `%s`", e)
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("Failed to send email: `%s`", e)
+        logger.error("Failed to send email: %s", e)
 
 
 def get_current_playlist() -> dict:
     """
     Get the current playlist from Spinitron API.
     """
-    logger.debug("Fetching current playlist from Spinitron API...")
-    try:
-        response = requests.get(f"{SPINITRON_API_BASE_URL}/playlists", timeout=5)
-        response.raise_for_status()
-        data = response.json()
+    logger.debug("Fetching current playlist from Spinitron API")
+    data = api_get("/playlists")
+    if data:
         items = data.get("items", [])
         if items:
             playlist = items[0]
             logger.debug("Current playlist: `%s`", playlist)
             return playlist
-        logger.error("No playlist items found in the response: `%s`", data)
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error("Connection error occurred while fetching playlist: `%s`", e)
-        return None
-    except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while fetching playlist: `%s`", e)
-        return None
-    except requests.exceptions.TooManyRedirects as e:
-        logger.error("Too many redirects while fetching playlist: `%s`", e)
-        return None
-    except requests.exceptions.InvalidURL as e:
-        logger.error("Invalid URL while fetching playlist: `%s`", e)
-        return None
-    except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while fetching playlist: `%s`", e)
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to fetch current playlist: `%s`", e)
-        return None
-    except IndexError:
-        logger.error("No playlists found in the response.")
-        return None
-    except ValueError:
-        logger.error("Failed to parse JSON response.")
-        return None
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            "An unexpected error occurred while getting the current playlist: `%s`", e
-        )
+        logger.error("No playlist items found in the response: %s", data)
     return None
 
 
@@ -164,106 +141,42 @@ def get_show(show_id: int) -> dict:
     """
     Get the show from Spinitron API.
     """
-    logger.debug("Fetching show from Spinitron API...")
-    try:
-        response = requests.get(f"{SPINITRON_API_BASE_URL}/shows/{show_id}", timeout=5)
-        response.raise_for_status()
-        if response.json():
-            logger.debug("Show: `%s`", response.json())
-            return response.json()
-        logger.error("No show found in the response.")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to fetch show: `%s`", e)
-        return None
-    except ValueError:
-        logger.error("Failed to parse JSON response.")
-        return None
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            "An unexpected error occurred while getting the current show: `%s`", e
-        )
-    return None
+    logger.debug("Fetching show with ID `%s`", show_id)
+    return api_get(f"/shows/{show_id}")
 
 
 def get_show_persona_ids(show: dict) -> list:
     """
-    Get the personas associated with a show from Spinitron API.
+    Extract persona IDs from a show response.
     """
     try:
-        personas = show["_links"].get("personas", [])
-        if personas:
-            # Example:
-            # 0:
-            # {href: "https://api-1.wbor.org/api/personas/182717"}
-
-            # Extract the IDs from the hrefs
-            persona_ids = [int(p["href"].split("/")[-1]) for p in personas]
-            logger.debug("Show personas: `%s`", persona_ids)
-            return persona_ids
-        logger.error("No personas found in the show response.")
-        return []
-    except KeyError:
-        logger.error("KeyError while getting show personas.")
-        return []
-    except ValueError:
-        logger.error("ValueError while getting show personas.")
-        return []
-    except TypeError:
-        logger.error("TypeError while getting show personas.")
-        return []
+        personas = show.get("_links", {}).get("personas", [])
+        return [
+            int(p["href"].rstrip("/").split("/")[-1]) for p in personas if p.get("href")
+        ]
     except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            "An unexpected error occurred while getting the show personas: `%s`", e
-        )
-    return []
+        logger.error("Error parsing persona IDs: `%s`", e)
+        return []
 
 
 def get_persona(persona_id: int) -> dict:
     """
     Get the persona from Spinitron API.
     """
-    logger.debug("Fetching persona from Spinitron API...")
-    try:
-        response = requests.get(
-            f"{SPINITRON_API_BASE_URL}/personas/{persona_id}", timeout=5
-        )
-        response.raise_for_status()
-        if response.json():
-            logger.debug("Persona: `%s`", response.json())
-            return response.json()
-        logger.error("No persona found in the response.")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to fetch persona: `%s`", e)
-        return None
-    except ValueError:
-        logger.error("Failed to parse JSON response.")
-        return None
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            "An unexpected error occurred while getting the current persona: `%s`", e
-        )
-    return None
+    logger.debug("Fetching persona with ID `%s`", persona_id)
+    return api_get(f"/personas/{persona_id}")
 
 
 def send_discord_email_notification(persona: dict) -> None:
     """
-    Fire the Discord webhook with a rich embed payload notifying MGMT
-    that an email was sent to the DJ.
+    Send a Discord webhook notification that an email was sent to the
+    DJ.
     """
     try:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
-
         if persona.get("string"):
-            fields.append(
-                {
-                    "name": "DJ",
-                    "value": persona["string"],
-                }
-            )
-
+            fields.append({"name": "DJ", "value": persona["string"]})
         if persona.get("playlist"):
             playlist = persona["playlist"]
             fields.append(
@@ -275,128 +188,91 @@ def send_discord_email_notification(persona: dict) -> None:
                     ),
                 }
             )
-
         payload["embeds"][0]["title"] = "Failsafe Gadget - Email Sent"
         payload["embeds"][0]["color"] = DISCORD_EMBED_WARNING_COLOR
         payload["embeds"][0]["description"] = (
-            f"Email sent to `{persona['email']}` regarding backup "
-            "source activation. Please check if the DJ is aware of the"
-            " backup source activation and if they need assistance."
+            f"Email sent to `{persona['email']}` regarding backup source activation. "
+            "Check if the DJ is aware and needs assistance."
         )
         if fields:
             payload["embeds"][0]["fields"] = fields
             logger.debug("send_discord_email_notification() Fields: `%s`", fields)
-
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
-
         response = requests.post(
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
         response.raise_for_status()
         logger.debug("Discord email message sent successfully")
-    except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while sending Discord email webhook: `%s`", e)
-    except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while sending Discord email webhook: `%s`", e)
-    except requests.exceptions.ConnectionError as e:
-        logger.error(
-            "Connection error occurred while sending Discord email webhook: `%s`", e
-        )
     except requests.exceptions.RequestException as e:
-        logger.error(
-            "Failed to send Discord email webhook due to a network error: `%s`", e
-        )
+        logger.error("Error sending Discord email webhook: `%s`", e)
+
+
+def resolve_persona(playlist: dict, current_source: str) -> tuple:
+    """
+    Resolve DJ persona details from a playlist.
+    Returns a tuple (persona_id, persona_name, persona_email,
+    persona_str).
+    """
+    persona = get_persona(playlist["persona_id"])
+    if persona:
+        pid = persona.get("id")
+        name = persona.get("name", "Unknown")
+        email = persona.get("email")
+        pstr = f"[{name}](mailto:{email})" if email else name
+    else:
+        pid, name, email, pstr = None, "Unknown", None, "Unknown"
+
+    if not email:
+        show_id = playlist.get("show_id")
+        if show_id:
+            show = get_show(show_id)
+            if show:
+                for alt_pid in get_show_persona_ids(show):
+                    if alt_pid != pid:
+                        alt_persona = get_persona(alt_pid)
+                        if alt_persona and alt_persona.get("email"):
+                            email = alt_persona["email"]
+                            pstr = f"[{alt_persona['name']}](mailto:{email})"
+                            break
+        if not email:
+            logger.warning(
+                "No email address found for DJ `%s` - sending message to DJ GroupMe group",
+                name,
+            )
+            send_groupme(
+                current_source, public=True, bot_id=config.get("GROUPME_BOT_ID_DJS")
+            )
+    return pid, name, email, pstr
 
 
 def send_discord(current_source: str) -> dict:
     """
-    Fire the Discord webhook with a rich embed payload.
-
-    The embed's color and description change based on whether the state
-    indicates backup.
-
-    Returns dict with info about the current playlist and DJ.
+    Send a Discord webhook with an embed payload based on the source
+    state. Returns a dict with playlist and DJ info.
     """
     try:
         payload = DISCORD_EMBED_PAYLOAD.copy()
         fields = []
-
         playlist = get_current_playlist()
 
-        persona = None
         persona_id = None
         persona_name = None
         persona_email = None
         persona_str = None
 
         if playlist:
-            # Convert the start and end times to a more readable format
             start_time = datetime.fromisoformat(playlist["start"]).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
             end_time = datetime.fromisoformat(playlist["end"]).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-
             is_automation = playlist.get("automation") == "1"
-
             logger.debug("Playlist: `%s`", playlist)
-            logger.debug("Is automation: `%s`", is_automation)
-
             if not is_automation:
-                persona = get_persona(playlist["persona_id"])
-                persona_id = persona["id"] if persona else None
-                persona_name = persona["name"] if persona else "Unknown"
-                persona_email = persona["email"] if persona else None
-
-                persona_str = None
-                if persona_email:
-                    persona_str = f"[{persona_name}](mailto:{persona_email})"
-                else:
-                    # No email address found in the persona
-                    persona_str = persona_name
-
-                    # TODO:
-                    # At this point, we should see if the show has any
-                    # other personas associated with it and attempt to
-                    # get their email address instead.
-
-                    found_email = False
-                    show_id = playlist.get("show_id")
-                    if show_id:
-                        show = get_show(show_id)
-                        if show:
-                            prev_persona_id = persona_id
-                            persona_ids = get_show_persona_ids(show)
-                            if persona_ids:
-                                # Iterate through the persona IDs excluding
-                                # the current one to find an email address
-                                for pid in persona_ids:
-                                    if pid != prev_persona_id:
-                                        persona = get_persona(pid)
-                                        if persona and persona.get("email"):
-                                            persona_email = persona["email"]
-                                            persona_str = (
-                                                f"[{persona['name']}]"
-                                                f"(mailto:{persona_email})"
-                                            )
-                                            found_email = True
-                                            break
-
-                    # If we can't find one, we should send a message to
-                    # the DJ-wide GroupMe group.
-                    if not found_email:
-                        logger.warning(
-                            "No email address found for DJ `%s` - "
-                            "sending message to DJ GroupMe group",
-                            persona_name,
-                        )
-                        send_groupme(
-                            current_source,
-                            public=True,
-                            bot_id=config.get("GROUPME_BOT_ID_DJS"),
-                        )
-
+                persona_id, persona_name, persona_email, persona_str = resolve_persona(
+                    playlist, current_source
+                )
             fields.extend(
                 [
                     {
@@ -406,20 +282,19 @@ def send_discord(current_source: str) -> dict:
                             f"/playlists/{playlist['id']})"
                         ),
                     },
-                    {
-                        "name": "DJ",
-                        "value": f"[{persona_str}]({SPINITRON_API_BASE_URL}/personas/{persona_id})",
-                    },
-                    {
-                        "name": "Start",
-                        "value": start_time,
-                        "inline": True,
-                    },
-                    {
-                        "name": "End",
-                        "value": end_time,
-                        "inline": True,
-                    },
+                    (
+                        {
+                            "name": "DJ",
+                            "value": (
+                                f"[{persona_str}]({SPINITRON_API_BASE_URL}"
+                                f"/personas/{persona_id})"
+                            ),
+                        }
+                        if persona_id
+                        else {"name": "DJ", "value": persona_str}
+                    ),
+                    {"name": "Start", "value": start_time, "inline": True},
+                    {"name": "End", "value": end_time, "inline": True},
                 ]
             )
 
@@ -427,18 +302,16 @@ def send_discord(current_source: str) -> dict:
             payload["content"] = "@everyone - stream may be down!"
             payload["embeds"][0]["color"] = DISCORD_EMBED_ERROR_COLOR
             payload["embeds"][0]["description"] = (
-                f"⚠️ **WARNING** ⚠️ switching to backup source `{current_source}`. "
+                f"⚠️ WARNING ⚠️ switching to backup source `{current_source}`. "
                 "This may indicate a failure in the primary source and should be investigated."
             )
             if fields:
                 payload["embeds"][0]["fields"] = fields
-                logger.debug("send_discord() Fields: `%s`", fields)
             else:
                 payload["embeds"][0]["description"] += (
-                    "\n\nNo playlist information available. Please "
-                    "check the Spinitron API for more details."
+                    "\n\nNo playlist information available. "
+                    "Please check the Spinitron API for details."
                 )
-                logger.warning("No Spinitron fields found!")
         else:
             payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
             payload["embeds"][0][
@@ -446,7 +319,6 @@ def send_discord(current_source: str) -> dict:
             ] = f"Switched back to primary source `{current_source}`"
 
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
-
         response = requests.post(
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
@@ -459,14 +331,8 @@ def send_discord(current_source: str) -> dict:
             "email": persona_email,
             "string": persona_str,
         }
-    except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while sending Discord webhook: `%s`", e)
-    except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while sending Discord webhook: `%s`", e)
-    except requests.exceptions.ConnectionError as e:
-        logger.error("Connection error occurred while sending Discord webhook: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logger.error("Failed to send Discord webhook due to a network error: `%s`", e)
+        logger.error("Error sending Discord webhook: %s", e)
     return None
 
 
@@ -483,56 +349,38 @@ def send_groupme(
             "bot_id": bot_id,
             "text": f"Stream switched back to primary source `{current_source}`",
         }
-
-        if current_source == BACKUP_SOURCE and not public:
-            payload["text"] = (
-                f"⚠️ WARNING ⚠️ stream switching to backup source `{current_source}`. "
-                "This may indicate a failure in the primary source and should be investigated!"
-            )
-        elif current_source == BACKUP_SOURCE and public:
-            # Message for the DJ group (`public`)
-            payload["text"] = (
-                "⚠️ WARNING ⚠️ Dead-air has been detected!\n\n"
-                "This is an automated message meant for the current "
-                "DJ(s). The audio console in the studio has switched to"
-                " the backup source due to a failure. Please double "
-                "check that you are broadcasting something - if in "
-                "doubt, turn the automation input on!\n\n"
-                "If the automating input isn't working, find a "
-                "radio safe playlist or CD to play on loop - DO"
-                " NOT leave the station until you have reached "
-                "out to someone from management to help you! "
-                "\n\nThanks for your help keeping the stream "
-                "live, and most importantly, FCC compliant!\n\n"
-                "If you have any questions, please reach out to"
-                " management at wbor@bowdoin.edu"
-            )
-
-        logger.debug("Sending GroupMe payload: `%s`", payload)
+        if current_source == BACKUP_SOURCE:
+            if not public:
+                payload["text"] = (
+                    f"⚠️ WARNING ⚠️ stream switching to backup source `{current_source}`. "
+                    "This may indicate a failure in the primary source and should be investigated!"
+                )
+            else:
+                payload["text"] = (
+                    "⚠️ WARNING ⚠️ Dead-air has been detected!\n\n"
+                    "This automated message is for the current DJ(s). "
+                    "The audio console in the studio has switched to "
+                    "the backup source due to a failure. "
+                    "Double-check that you are broadcasting; if in "
+                    "doubt, turn the automation input on.\n\n"
+                    "If the automating input isn't working, find a "
+                    "radio safe playlist or CD to loop. Do not leave "
+                    "until management is contacted."
+                )
+        logger.debug("Sending GroupMe payload: %s", payload)
         response = requests.post(
             config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
         )
         response.raise_for_status()
         logger.debug("GroupMe message sent successfully")
-    except requests.exceptions.Timeout as e:
-        logger.error("Request timed out while sending GroupMe message: `%s`", e)
-    except requests.exceptions.HTTPError as e:
-        logger.error("HTTP error occurred while sending GroupMe message: `%s`", e)
-    except requests.exceptions.ConnectionError as e:
-        logger.error("Connection error occurred while sending GroupMe message: `%s`", e)
     except requests.exceptions.RequestException as e:
-        logger.error("Failed to send GroupMe message due to a network error: `%s`", e)
+        logger.error("Error sending GroupMe message: `%s`", e)
 
 
 def main():
     """
     Monitor digital pin and send webhook on state change.
-
-    Log the state changes and send a Discord webhook with the
-    appropriate embed payload.
     """
-    # Track the previous state so we only send the webhook on a state
-    # change.
     prev_state = DIGITAL_PIN.value
     prev_source = PRIMARY_SOURCE if prev_state else BACKUP_SOURCE
     logger.info(
@@ -543,12 +391,6 @@ def main():
     while True:
         current_state = DIGITAL_PIN.value
         current_source = PRIMARY_SOURCE if current_state else BACKUP_SOURCE
-        # logger.debug(
-        #     "%s state is %s (input source `%s`)",
-        #     PIN_NAME,
-        #     current_state,
-        #     current_source,
-        # )
         if current_state != prev_state:
             logger.info("Source changed from `%s` to `%s`", prev_source, current_source)
             persona = send_discord(current_source)
