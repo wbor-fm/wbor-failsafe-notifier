@@ -373,7 +373,8 @@ def send_groupme(
                 )
             else:
                 payload["text"] = (
-                    "⚠️ WARNING ⚠️ Dead-air has been detected!\n\n"
+                    "⚠️ WARNING ⚠️\n\n Dead-air has been detected! "
+                    "(More than 60 seconds of silence)\n\n"
                     "This automated message is for the current DJ(s). "
                     "The audio console in the studio has switched to "
                     "the backup source due to a failure. "
@@ -381,8 +382,8 @@ def send_groupme(
                     "doubt, turn the automation input on and make sure "
                     "that the volume slider is up.\n\n"
                     "If the automating input isn't working, find a "
-                    "radio safe playlist or CD to loop. Do not leave "
-                    "until management is contacted."
+                    "radio safe playlist or CD to loop. Please do not "
+                    "leave until management is contacted."
                 )
         logger.debug("Sending GroupMe payload: %s", payload)
         response = requests.post(
