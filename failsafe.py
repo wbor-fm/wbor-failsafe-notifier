@@ -373,7 +373,7 @@ def send_groupme(
                 )
             else:
                 payload["text"] = (
-                    "⚠️ WARNING ⚠️\n\n Dead-air has been detected! "
+                    "⚠️ WARNING ⚠️\n\nDead-air has been detected! "
                     "(More than 60 seconds of silence)\n\n"
                     "This automated message is for the current DJ(s). "
                     "The audio console in the studio has switched to "
