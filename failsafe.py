@@ -276,7 +276,11 @@ def send_discord(current_source: str) -> dict:
         persona_email = None
         persona_str = None
 
+        thumb_url = None
+
         if playlist:
+            thumb_url = playlist.get("image")
+
             start_time = datetime.fromisoformat(playlist["start"]).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
@@ -328,6 +332,9 @@ def send_discord(current_source: str) -> dict:
                     "\n\nNo playlist information available. "
                     "Please check the Spinitron API for details."
                 )
+
+            if thumb_url:
+                payload["thumbnail"] = {"url": thumb_url}
         else:
             payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
             payload["embeds"][0][
