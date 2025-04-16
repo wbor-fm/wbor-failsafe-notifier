@@ -73,8 +73,6 @@ DISCORD_EMBED_PAYLOAD = {
 
 SPINITRON_API_BASE_URL = config.get("SPINITRON_API_BASE_URL")
 
-# Helper function for API GET requests
-
 
 def api_get(endpoint: str) -> dict:
     """
