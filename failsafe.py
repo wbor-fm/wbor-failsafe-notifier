@@ -4,11 +4,12 @@ webhook notification when the input state changes. It distinguishes
 between primary and backup sources based on the configured pin state.
 
 Author: Mason Daugherty <@mdrxy>
-Version: 1.0.0
-Last Modified: 2025-03-22
+Version: 1.2.0
+Last Modified: 2025-05-06
 
 Changelog:
     - 1.0.0 (2025-03-22): Initial release.
+    - 1.2.0 (2025-05-06): Many fixes and small enhancements
 """
 
 import logging
