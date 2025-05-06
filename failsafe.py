@@ -291,6 +291,19 @@ def send_discord(current_source: str) -> dict:
                 persona_id, persona_name, persona_email, persona_str = resolve_persona(
                     playlist, current_source
                 )
+            # Compute DJ field dict
+            if persona_id:
+                # If persona_str starts with '[', it's already a
+                # markdown link to the email address.
+                # Otherwise, create a markdown link to the persona
+                # page on Spinitron.
+                if persona_str and persona_str.startswith("["):
+                    dj_value = persona_str
+                else:
+                    dj_value = f"[{persona_str}]({SPINITRON_API_BASE_URL}/personas/{persona_id})"
+            else:
+                dj_value = persona_str
+            dj_field = {"name": "DJ", "value": dj_value}
             fields.extend(
                 [
                     {
@@ -300,17 +313,7 @@ def send_discord(current_source: str) -> dict:
                             f"/playlists/{playlist['id']})"
                         ),
                     },
-                    (
-                        {
-                            "name": "DJ",
-                            "value": (
-                                f"[{persona_str}]({SPINITRON_API_BASE_URL}"
-                                f"/personas/{persona_id})"
-                            ),
-                        }
-                        if persona_id
-                        else {"name": "DJ", "value": persona_str}
-                    ),
+                    dj_field,
                     {"name": "Start", "value": start_time, "inline": True},
                     {"name": "End", "value": end_time, "inline": True},
                 ]
