@@ -4,12 +4,14 @@ webhook notification when the input state changes. It distinguishes
 between primary and backup sources based on the configured pin state.
 
 Author: Mason Daugherty <@mdrxy>
-Version: 1.2.0
-Last Modified: 2025-05-06
+Version: 1.3.0
+Last Modified: 2025-05-10
 
 Changelog:
     - 1.0.0 (2025-03-22): Initial release.
     - 1.2.0 (2025-05-06): Many fixes and small enhancements
+    - 1.3.0 (2025-05-10): Added RabbitMQ publishing for notifications
+        and refactored code for better readability and maintainability.
 """
 
 import logging
@@ -17,6 +19,7 @@ import smtplib
 import time
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from typing import Any, Dict, Optional
 
 import board
 import digitalio
@@ -24,26 +27,39 @@ import requests
 from dotenv import dotenv_values
 
 from utils.logging import configure_logging
+from utils.rabbitmq_publisher import RabbitMQPublisher
 
 logging.root.handlers = []
 logger = configure_logging()
 
+# Load and validate required configurations
 config = dotenv_values(".env")
-if not config.get("PIN_ASSIGNMENT"):
-    raise ValueError("`PIN_ASSIGNMENT` must be set in the .env file!")
-if not config.get("DISCORD_WEBHOOK_URL"):
-    raise ValueError("`DISCORD_WEBHOOK_URL` must be set in the .env file!")
-if not config.get("BACKUP_INPUT"):
-    raise ValueError("`BACKUP_INPUT` must be set in the .env file!")
+required_configs = [
+    "PIN_ASSIGNMENT",
+    "BACKUP_INPUT",
+]
+missing_configs = [key for key in required_configs if not config.get(key)]
+if missing_configs:
+    CFG_ERR_MSG = (
+        f"Required configuration(s) `{'`, `'.join(missing_configs)}` must be set in .env file or "
+        "environment!"
+    )
+    logger.critical(CFG_ERR_MSG)
+    raise ValueError(CFG_ERR_MSG)
 
 PIN_NAME = config.get("PIN_ASSIGNMENT")
 try:
     pin = getattr(board, PIN_NAME)
 except AttributeError as exc:
+    logger.critical("%s is not a valid pin name for this board.", PIN_NAME)
     raise ValueError(f"{PIN_NAME} is not a valid pin name for this board.") from exc
 
-DIGITAL_PIN = digitalio.DigitalInOut(pin)
-DIGITAL_PIN.switch_to_input()
+try:
+    DIGITAL_PIN = digitalio.DigitalInOut(pin)
+    DIGITAL_PIN.switch_to_input()
+except Exception as e:
+    logger.critical("Failed to initialize digital pin %s: %s", PIN_NAME, e)
+    raise RuntimeError(f"Failed to initialize digital pin {PIN_NAME}") from e
 
 # Determine primary and backup sources.
 # If BACKUP_INPUT is "A", then primary is "B"; if BACKUP_INPUT is "B",
@@ -58,7 +74,9 @@ DISCORD_EMBED_ERROR_COLOR = 16711680  # Red
 DISCORD_EMBED_WARNING_COLOR = 16776960  # Yellow
 DISCORD_EMBED_SUCCESS_COLOR = 65280  # Green
 
-DISCORD_EMBED_PAYLOAD = {
+# Discord base payload
+DISCORD_WEBHOOK_URL = config.get("DISCORD_WEBHOOK_URL")
+DISCORD_EMBED_PAYLOAD_BASE = {
     "embeds": [
         {
             "title": "Failsafe Gadget - Source Switched",
@@ -72,67 +90,157 @@ DISCORD_EMBED_PAYLOAD = {
     ],
 }
 
+# Spinitron config
 SPINITRON_API_BASE_URL = config.get("SPINITRON_API_BASE_URL")
 
+# GroupMe config
+GROUPME_API_BASE_URL = config.get("GROUPME_API_BASE_URL", "https://api.groupme.com/v3")
+GROUPME_BOT_ID_MGMT = config.get("GROUPME_BOT_ID_MGMT")
+GROUPME_BOT_ID_DJS = config.get("GROUPME_BOT_ID_DJS")
 
-def api_get(endpoint: str) -> dict:
+# Email config
+SMTP_SERVER = config.get("SMTP_SERVER")
+SMTP_PORT = config.get("SMTP_PORT")
+SMTP_USERNAME = config.get("SMTP_USERNAME")
+SMTP_PASSWORD = config.get("SMTP_PASSWORD")
+FROM_EMAIL = config.get("FROM_EMAIL")
+ERROR_EMAIL = config.get("ERROR_EMAIL")
+
+# RabbitMQ config
+RABBITMQ_AMQP_URL = config.get("RABBITMQ_AMQP_URL")
+RABBITMQ_EXCHANGE_NAME = config.get("RABBITMQ_EXCHANGE_NAME", "wbor_failsafe_events")
+RABBITMQ_ROUTING_KEY = config.get(
+    "RABBITMQ_ROUTING_KEY", "notification.failsafe-status"
+)
+rabbitmq_publisher: Optional[RabbitMQPublisher] = None
+
+
+def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
+    """
+    Initializes and returns RabbitMQPublisher if configured.
+    """
+    if RABBITMQ_AMQP_URL:
+        try:
+            publisher = RabbitMQPublisher(
+                amqp_url=RABBITMQ_AMQP_URL, exchange_name=RABBITMQ_EXCHANGE_NAME
+            )
+            logger.info(
+                "RabbitMQ publisher initialized for exchange `%s`.",
+                RABBITMQ_EXCHANGE_NAME,
+            )
+            return publisher
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(
+                "Failed to initialize RabbitMQ publisher: `%s`. Proceeding without RabbitMQ.",
+                e,
+            )
+    else:
+        logger.info(
+            "RabbitMQ AMQP URL not configured. RabbitMQ publishing will be disabled."
+        )
+    return None
+
+
+def api_get(endpoint: str) -> Optional[dict]:
     """
     Make a GET request to the Spinitron API and return the JSON
     response.
+
+    Parameters:
+    - endpoint (str): The API endpoint to fetch.
+
+    Returns:
+    - dict: The JSON response from the API, or None if an error
+        occurred.
     """
-    url = f"{SPINITRON_API_BASE_URL}{endpoint}"
+    if not SPINITRON_API_BASE_URL:
+        logger.warning(
+            "SPINITRON_API_BASE_URL not configured. Cannot make API GET request."
+        )
+        return None
+    url = f"{SPINITRON_API_BASE_URL.rstrip('/')}/{endpoint.lstrip('/')}"
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
+    except requests.exceptions.HTTPError as e:
+        logger.error(
+            "HTTP error fetching `%s`: Status %s, Response: %s",
+            url,
+            e.response.status_code,
+            e.response.text,
+        )
     except requests.exceptions.RequestException as e:
-        logger.error("Error fetching `%s`: `%s`", url, e)
-        return None
+        logger.error("Request error fetching `%s`: `%s`", url, e)
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("Unexpected error fetching `%s`: `%s`", url, e)
-        return None
+        logger.error("Unexpected error fetching `%s`: `%s`", url, e, exc_info=True)
+    return None
 
 
-def send_email(
-    subject: str, body: str, to: str, from_: str = config.get("FROM_EMAIL")
-) -> None:
+def send_email(subject: str, body: str, to_email: str) -> None:
     """
     Send an email using the configured SMTP server.
+
+    Parameters:
+    - subject (str): The subject of the email.
+    - body (str): The body of the email.
+    - to_email (str): The recipient's email address.
     """
+    if not all(
+        [SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, FROM_EMAIL, to_email]
+    ):
+        logger.warning(
+            "SMTP settings or recipient email not fully configured. Cannot send email."
+        )
+        return
+
+    logger.info("Attempting to send email to `%s` with subject: %s", to_email, subject)
     try:
         msg = MIMEText(body)
         msg["Subject"] = subject
-        msg["To"] = to
-        msg["From"] = from_
+        msg["To"] = to_email
+        msg["From"] = FROM_EMAIL
 
-        with smtplib.SMTP(config.get("SMTP_SERVER"), config.get("SMTP_PORT")) as server:
-            server.starttls()
-            server.login(config.get("SMTP_USERNAME"), config.get("SMTP_PASSWORD"))
-            server.sendmail(from_, [to], msg.as_string())
+        smtp_port_int = int(SMTP_PORT)
+
+        with smtplib.SMTP(SMTP_SERVER, smtp_port_int, timeout=20) as server:
+            server.ehlo()  # Extended Hello
+            server.starttls()  # Secure the connection
+            server.ehlo()  # Re-EHLO after TLS
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
+        logger.info("Email successfully sent to `%s`", to_email)
     except smtplib.SMTPRecipientsRefused as e:
-        logger.error("SMTP recipients refused: `%s`", e)
-        send_email(
-            subject="Failsafe Gadget - SMTP Recipients Refused",
-            body=f"SMTP recipients refused: {e}",
-            to=config.get("ERROR_EMAIL"),
-        )
+        logger.error("SMTP recipients refused for `%s`: %s", to_email, e.recipients)
+        if ERROR_EMAIL and to_email != ERROR_EMAIL:  # Avoid self-notification loop
+            send_email(
+                subject="Failsafe Gadget - SMTP Recipients Refused",
+                body=f"SMTP recipients refused for {to_email}: {e.recipients}",
+                to_email=ERROR_EMAIL,
+            )
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("Failed to send email: %s", e)
+        logger.error("Failed to send email to %s: %s", to_email, e, exc_info=True)
+        if ERROR_EMAIL and to_email != ERROR_EMAIL:
+            send_email(
+                subject="Failsafe Gadget - Email Sending Failure",
+                body=f"General failure sending email to {to_email}: {e}",
+                to_email=ERROR_EMAIL,
+            )
 
 
-def get_current_playlist() -> dict:
+def get_current_playlist() -> Optional[dict]:
     """
     Get the current playlist from Spinitron API.
     """
     logger.debug("Fetching current playlist from Spinitron API")
-    data = api_get("/playlists")
+    data = api_get("playlists?count=1")  # Fetch only the latest one
     if data:
         items = data.get("items", [])
         if items:
             playlist = items[0]
-            logger.debug("Current playlist: `%s`", playlist)
+            logger.debug("Current playlist: `%s`", playlist.get("title", "N/A"))
             return playlist
-        logger.error("No playlist items found in the response: %s", data)
+        logger.warning("No playlist items found in the response: %s", data)
     return None
 
 
@@ -141,7 +249,7 @@ def get_show(show_id: int) -> dict:
     Get the show from Spinitron API.
     """
     logger.debug("Fetching show with ID `%s`", show_id)
-    return api_get(f"/shows/{show_id}")
+    return api_get(f"shows/{show_id}")
 
 
 def get_show_persona_ids(show: dict) -> list:
@@ -149,13 +257,16 @@ def get_show_persona_ids(show: dict) -> list:
     Extract persona IDs from a show response.
     """
     try:
-        personas = show.get("_links", {}).get("personas", [])
+        personas_links = show.get("_links", {}).get("personas", [])
         return [
-            int(p["href"].rstrip("/").split("/")[-1]) for p in personas if p.get("href")
+            int(p_link["href"].rstrip("/").split("/")[-1])
+            for p_link in personas_links
+            if p_link.get("href")
+            and p_link["href"].rstrip("/").split("/")[-1].isdigit()
         ]
     except Exception as e:  # pylint: disable=broad-except
-        logger.error("Error parsing persona IDs: `%s`", e)
-        return []
+        logger.error("Error parsing persona IDs from show: `%s`", e, exc_info=True)
+    return []
 
 
 def get_persona(persona_id: int) -> dict:
@@ -163,303 +274,425 @@ def get_persona(persona_id: int) -> dict:
     Get the persona from Spinitron API.
     """
     logger.debug("Fetching persona with ID `%s`", persona_id)
-    return api_get(f"/personas/{persona_id}")
+    return api_get(f"personas/{persona_id}")
 
 
-def send_discord_email_notification(persona: dict) -> None:
+def send_discord_notification(payload: Dict[str, Any]) -> None:
     """
-    Send a Discord webhook notification that an email was sent to the
-    DJ.
+    Sends a pre-formatted payload to the Discord webhook.
     """
-    try:
-        payload = DISCORD_EMBED_PAYLOAD.copy()
-        fields = []
-        if persona.get("string"):
-            fields.append({"name": "DJ", "value": persona["string"]})
-        if persona.get("playlist"):
-            playlist = persona["playlist"]
-            fields.append(
-                {
-                    "name": "Playlist",
-                    "value": (
-                        f"[{playlist['title']}]({SPINITRON_API_BASE_URL}"
-                        f"/playlists/{playlist['id']})"
-                    ),
-                }
-            )
-        payload["embeds"][0]["title"] = "Failsafe Gadget - Email Sent"
-        payload["embeds"][0]["color"] = DISCORD_EMBED_WARNING_COLOR
-        payload["embeds"][0]["description"] = (
-            f"Email sent to `{persona['email']}` regarding backup source activation. "
-            "Check if the DJ is aware and needs assistance."
-        )
-        if fields:
-            payload["embeds"][0]["fields"] = fields
-            logger.debug("send_discord_email_notification() Fields: `%s`", fields)
-        payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
-        response = requests.post(
-            config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
-        )
-        response.raise_for_status()
-        logger.debug("Discord email message sent successfully")
-    except requests.exceptions.RequestException as e:
-        logger.error("Error sending Discord email webhook: `%s`", e)
-
-
-def resolve_persona(playlist: dict, current_source: str) -> tuple:
-    """
-    Resolve DJ persona details from a playlist.
-    Returns a tuple (persona_id, persona_name, persona_email,
-    persona_str).
-    """
-    # Get the primary persona details.
-    persona = get_persona(playlist["persona_id"])
-    if persona:
-        pid = persona.get("id")
-        name = persona.get("name", "Unknown")
-        email = persona.get("email")
-        pstr = f"[{name}](mailto:{email})" if email else name
-    else:
-        pid, name, email, pstr = None, "Unknown", None, "Unknown"
-
-    # If we already have an email, return early.
-    if email:
-        return pid, name, email, pstr
-
-    # Try to resolve an alternative persona email using the show's
-    # personas.
-    show_id = playlist.get("show_id")
-    if show_id:
-        show = get_show(show_id)
-        if show:
-            alt_ids = [
-                alt_pid for alt_pid in get_show_persona_ids(show) if alt_pid != pid
-            ]
-            for alt_pid in alt_ids:
-                alt_persona = get_persona(alt_pid)
-                if alt_persona:
-                    alt_email = alt_persona.get("email")
-                    if alt_email:
-                        email = alt_email
-                        pstr = f"[{alt_persona.get('name', 'Unknown')}](mailto:{email})"
-                        break
-
-    if not email:
+    if not DISCORD_WEBHOOK_URL:
         logger.warning(
-            "No email address found for DJ %s - sending message to DJ GroupMe group",
-            name,
+            "DISCORD_WEBHOOK_URL not configured. Cannot send Discord notification."
         )
+        return
 
-        # Only GroupMe when switching to backup source, not when
-        # switching back to primary.
-        if current_source == BACKUP_SOURCE:
-            send_groupme(
-                current_source, public=True, bot_id=config.get("GROUPME_BOT_ID_DJS")
-            )
-
-    return pid, name, email, pstr
-
-
-def send_discord(current_source: str) -> dict:
-    """
-    Send a Discord webhook with an embed payload based on the source
-    state. Returns a dict with playlist and DJ info.
-    """
-    try:
-        payload = DISCORD_EMBED_PAYLOAD.copy()
-        fields = []
-        playlist = get_current_playlist()
-
-        persona_id = None
-        persona_name = None
-        persona_email = None
-        persona_str = None
-
-        thumb_url = None
-
-        if playlist:
-            thumb_url = playlist.get("image")
-
-            start_time = datetime.fromisoformat(playlist["start"]).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            end_time = datetime.fromisoformat(playlist["end"]).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            is_automation = playlist.get("automation") == "1"
-            logger.debug("Playlist: `%s`", playlist)
-            if not is_automation:
-                persona_id, persona_name, persona_email, persona_str = resolve_persona(
-                    playlist, current_source
-                )
-            # Compute DJ field dict
-            if persona_id:
-                # If persona_str starts with '[', it's already a
-                # markdown link to the email address.
-                # Otherwise, create a markdown link to the persona
-                # page on Spinitron.
-                if persona_str and persona_str.startswith("["):
-                    dj_value = persona_str
-                else:
-                    dj_value = f"[{persona_str}]({SPINITRON_API_BASE_URL}/personas/{persona_id})"
-            else:
-                dj_value = persona_str
-            dj_field = {"name": "DJ", "value": dj_value}
-            fields.extend(
-                [
-                    {
-                        "name": "Playlist",
-                        "value": (
-                            f"[{playlist['title']}]({SPINITRON_API_BASE_URL}"
-                            f"/playlists/{playlist['id']})"
-                        ),
-                    },
-                    dj_field,
-                    {"name": "Start", "value": start_time, "inline": True},
-                    {"name": "End", "value": end_time, "inline": True},
-                ]
-            )
-
-        if current_source == BACKUP_SOURCE:
-            payload["content"] = "@everyone - stream may be down!"
-            payload["embeds"][0]["color"] = DISCORD_EMBED_ERROR_COLOR
-            payload["embeds"][0]["description"] = (
-                f"⚠️ WARNING ⚠️ switching to backup source `{current_source}`. "
-                "This may indicate a failure in the primary source and should be investigated."
-            )
-            if fields:
-                payload["embeds"][0]["fields"] = fields
-            else:
-                payload["embeds"][0]["description"] += (
-                    "\n\nNo playlist information available. "
-                    "Please check the Spinitron API for details."
-                )
-
-            if thumb_url:
-                payload["thumbnail"] = {"url": thumb_url}
-        else:
-            payload["embeds"][0]["color"] = DISCORD_EMBED_SUCCESS_COLOR
-            payload["embeds"][0][
-                "description"
-            ] = f"Switched back to primary source `{current_source}`"
-
+    # Ensure timestamp is always present and in UTC
+    if "embeds" in payload and payload["embeds"]:
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
-        payload["embeds"][0]["footer"] = {
-            "text": "Powered by WBOR-91-1-FM/wbor-failsafe-notifier",
-        }
-        response = requests.post(
-            config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
-        )
-        response.raise_for_status()
-        logger.debug("Discord message sent successfully")
 
-        return {
-            "playlist": playlist,
-            "name": persona_name,
-            "email": persona_email,
-            "string": persona_str,
-        }
+    try:
+        logger.info("Sending notification to Discord.")
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        response.raise_for_status()
+        logger.debug("Discord notification sent successfully.")
     except requests.exceptions.RequestException as e:
         logger.error("Error sending Discord webhook: %s", e)
-    return None
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error(
+            "Unexpected error sending Discord notification: %s", e, exc_info=True
+        )
 
 
-def send_groupme(
+def send_discord_source_change(
     current_source: str,
-    public: bool = False,
-    bot_id: str = config.get("GROUPME_BOT_ID_MGMT"),
+    playlist_info: Optional[Dict[str, Any]],
+    persona_info: Optional[Dict[str, Any]],
 ) -> None:
     """
-    Send a message to a GroupMe group.
+    Sends Discord notification about source change.
     """
-    try:
-        payload = {
-            "bot_id": bot_id,
-            "text": f"Stream switched back to primary source `{current_source}`",
-        }
-        if current_source == BACKUP_SOURCE:
-            if not public:
-                payload["text"] = (
-                    f"⚠️ WARNING ⚠️ stream switching to backup source `{current_source}`. "
-                    "This may indicate a failure in the primary source and should be investigated!"
+    payload = DISCORD_EMBED_PAYLOAD_BASE.copy()
+    embed = payload["embeds"][0]
+
+    fields = []
+    thumb_url = None
+
+    if playlist_info:
+        thumb_url = playlist_info.get("image")
+        start_time_str = (
+            datetime.fromisoformat(playlist_info["start"]).strftime(
+                "%Y-%m-%d %I:%M %p ET"
+            )
+            if playlist_info.get("start")
+            else "N/A"
+        )
+        end_time_str = (
+            datetime.fromisoformat(playlist_info["end"]).strftime(
+                "%Y-%m-%d %I:%M %p ET"
+            )
+            if playlist_info.get("end")
+            else "N/A"
+        )
+
+        fields.append(
+            {
+                "name": "Playlist",
+                # Value is a link to the playlist on Spinitron
+                "value": (
+                    f"[{playlist_info.get('title', 'N/A')}]({SPINITRON_API_BASE_URL}/playlists/"
+                    f"{playlist_info['id']})"
+                    if SPINITRON_API_BASE_URL and playlist_info.get("id")
+                    else playlist_info.get("title", "N/A")
+                ),
+            }
+        )
+        if persona_info and persona_info.get("name"):
+            dj_name = persona_info["name"]
+            dj_id = persona_info.get("id")
+            dj_value = (
+                f"[{dj_name}]({SPINITRON_API_BASE_URL}/personas/{dj_id})"
+                if SPINITRON_API_BASE_URL and dj_id
+                else dj_name
+            )
+            fields.append({"name": "DJ", "value": dj_value})
+
+        fields.append({"name": "Start Time", "value": start_time_str, "inline": True})
+        fields.append({"name": "End Time", "value": end_time_str, "inline": True})
+
+    if current_source == BACKUP_SOURCE:
+        payload["content"] = "@everyone - Stream May Be Down!"  # Ping everyone
+        embed["color"] = DISCORD_EMBED_ERROR_COLOR
+        embed["title"] = "FAILSAFE ACTIVATED (Backup Source)"
+        embed["description"] = (
+            f"Switched to backup source **`{current_source}`**. "
+            "Primary source may have failed. Investigation may be required."
+        )
+    else:
+        # Switched back to primary
+        embed["color"] = DISCORD_EMBED_SUCCESS_COLOR
+        embed["title"] = "Failsafe Resolved (Primary Source)"
+        embed["description"] = (
+            f"Switched back to primary source **`{current_source}`**. System normal."
+        )
+
+    if fields:
+        embed["fields"] = fields
+    if (
+        thumb_url and isinstance(thumb_url, str) and embed.get("thumbnail") is None
+    ):  # Check if thumbnail is not already set by base
+        embed["thumbnail"] = {"url": thumb_url}
+
+    embed["footer"] = {"text": "Powered by WBOR-91-1-FM/wbor-failsafe-notifier"}
+
+    send_discord_notification(payload)
+
+
+def send_discord_email_alert(
+    dj_name: str, dj_email: str, playlist_title: Optional[str]
+) -> None:
+    """
+    Notifies Discord that an email was sent to the DJ.
+    """
+    payload = DISCORD_EMBED_PAYLOAD_BASE.copy()
+    embed = payload["embeds"][0]
+
+    embed["title"] = "ℹFailsafe Gadget - DJ Email Notification Sent"
+    embed["color"] = DISCORD_EMBED_WARNING_COLOR
+    embed["description"] = (
+        f"An automated email was sent to **{dj_name}** (`{dj_email}`) "
+        "regarding the failsafe activation for their show. Check if the DJ is "
+        "aware and needs assistance."
+    )
+    if playlist_title:
+        embed["fields"] = [{"name": "Show Currently On-Air", "value": playlist_title}]
+
+    send_discord_notification(payload)
+
+
+def resolve_and_notify_dj(
+    playlist: Dict[str, Any], current_source: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolves DJ info from show and sends notifications if applicable.
+    """
+    if not playlist or playlist.get("automation"):  # No notification for automation
+        logger.info(
+            "Current playlist is automation or not found. No DJ specific notifications."
+        )
+        return None
+
+    persona_id = playlist.get("persona_id")
+    primary_persona_data: Optional[Dict[str, Any]] = None
+    dj_email_to_notify: Optional[str] = None
+    dj_name_to_notify: str = "Unknown DJ"
+
+    if persona_id:
+        primary_persona_data = get_persona(persona_id)
+        if primary_persona_data:
+            dj_name_to_notify = primary_persona_data.get("name", "Unknown DJ")
+            dj_email_to_notify = primary_persona_data.get("email")
+
+    # Try to find email from other show personas if primary doesn't have one
+    if not dj_email_to_notify and playlist.get("show_id"):
+        show = get_show(playlist["show_id"])
+        if show:
+            alt_persona_ids = get_show_persona_ids(show)
+            for alt_id in alt_persona_ids:
+                if alt_id == persona_id:
+                    continue  # Skip primary already checked
+                alt_persona = get_persona(alt_id)
+                if alt_persona and alt_persona.get("email"):
+                    dj_email_to_notify = alt_persona["email"]
+                    # Prefer name of persona with email if primary name was "Unknown" or primary had
+                    # no email
+                    if dj_name_to_notify == "Unknown DJ" or not (
+                        primary_persona_data and primary_persona_data.get("email")
+                    ):
+                        dj_name_to_notify = alt_persona.get("name", "Unknown DJ")
+                    logger.info(
+                        "Found email via alternative persona: %s", dj_name_to_notify
+                    )
+                    break
+
+    # Package persona info for Discord and RabbitMQ
+    # Ensure persona_info is created even if some details are missing
+    persona_info_for_event = {
+        "id": persona_id,
+        "name": dj_name_to_notify,
+        "email_notified": None,  # Will be set if email is sent
+    }
+    if primary_persona_data:  # Add more details if available
+        persona_info_for_event.update(
+            {
+                k: primary_persona_data.get(k)
+                for k in ["website", "bio", "image"]
+                if primary_persona_data.get(k)
+            }
+        )
+
+    # Only notify DJ actively if switched to backup
+    if current_source == BACKUP_SOURCE:
+        if dj_email_to_notify:
+            logger.info(
+                "Attempting to email DJ `%s` at `%s`",
+                dj_name_to_notify,
+                dj_email_to_notify,
+            )
+            email_body = (
+                f"Hey {dj_name_to_notify}!\n\nThis is an automated message from WBOR's Failsafe "
+                "Gadget.\n\n It appears the station has switched to the backup audio source during "
+                f"your show '{playlist.get('title', 'N/A')}'. This usually means there's an issue "
+                "with the audio from the audio console (e.g., dead air, incorrect input selected, "
+                "or equipment malfunction).\n\n Please check the following:\n"
+                "1. Is your microphone on and audible?\n"
+                "2. Is your music/audio source playing correctly through the board?\n"
+                "3. Are the correct channels selected and faders up on the mixing console?\n\n"
+                "If you cannot resolve the issue, please ensure the station is broadcasting "
+                "something (e.g., put automation on if available and working, or a long, clean "
+                "music track) and contact station management immediately for assistance.\n\n"
+                "Do not reply to this email as it is unattended. Contact management via "
+                "wbor@bowdoin.edu or other channels.\n\nThanks for your help!"
+            )
+            send_email(
+                subject="ATTN: WBOR Failsafe Activated - Action Required During Your Show",
+                body=email_body,
+                to_email=dj_email_to_notify,
+            )
+            send_discord_email_alert(
+                dj_name_to_notify, dj_email_to_notify, playlist.get("title")
+            )
+            persona_info_for_event["email_notified"] = dj_email_to_notify
+        else:
+            logger.warning(
+                "No email address found for DJ(s) of show `%s`. Sending alert to public GroupMe.",
+                playlist.get("title", "N/A"),
+            )
+            if GROUPME_BOT_ID_DJS:
+                send_groupme_notification(
+                    current_source, GROUPME_BOT_ID_DJS, is_public_dj_alert=True
                 )
             else:
-                payload["text"] = (
-                    "⚠️ WARNING ⚠️\n\nDead-air has been detected! "
-                    "(More than 60 seconds of silence)\n\n"
-                    "This automated message is for the current DJ(s). "
-                    "The audio console in the studio has switched to "
-                    "the backup source due to a failure. "
-                    "Double-check that you are broadcasting; if in "
-                    "doubt, turn the automation input on and make sure "
-                    "that the volume slider is up.\n\n"
-                    "If the automating input isn't working, find a "
-                    "radio safe playlist or CD to loop. Please do not "
-                    "leave until management is contacted."
+                logger.warning(
+                    "GROUPME_BOT_ID_DJS not configured, cannot send public DJ alert."
                 )
-        logger.debug("Sending GroupMe payload: %s", payload)
+
+    return persona_info_for_event
+
+
+def send_groupme_notification(
+    current_source: str, bot_id: Optional[str], is_public_dj_alert: bool = False
+) -> None:
+    """
+    Sends a message to a GroupMe group.
+    """
+    if not bot_id:
+        logger.debug(
+            "GroupMe Bot ID not configured for this alert type. Skipping GroupMe notification."
+        )
+        return
+    if not GROUPME_API_BASE_URL:
+        logger.warning(
+            "`GROUPME_API_BASE_URL` not configured. Cannot send GroupMe message."
+        )
+        return
+
+    text_message = ""
+    if current_source == BACKUP_SOURCE:
+        if is_public_dj_alert:
+            text_message = (
+                "⚠️ WARNING ⚠️\n\nWBOR may be experiencing dead air (more than 60 seconds of "
+                "silence). The studio audio console has automatically switched to the backup audio "
+                "source. If you are the current DJ, please check your broadcast. Ensure your "
+                "microphone is on, music is playing, and levels are appropriate. If issues "
+                "persist, contact station management. Please do not leave the station "
+                "until management is contacted.\n\n"
+            )
+        else:  # Management alert
+            text_message = (
+                f"⚠️ FAILSAFE ACTIVATED ⚠️\nWBOR has switched to backup source `{current_source}`. "
+                "Primary source may have failed. Investigation may be required."
+            )
+    else:  # Switched back to primary
+        text_message = (
+            f"✅ FAILSAFE RESOLVED ✅\nWBOR has switched back to primary source `{current_source}`. "
+            "System normal."
+        )
+
+    payload = {"bot_id": bot_id, "text": text_message}
+
+    try:
+        logger.info(
+            "Sending GroupMe notification to bot ID %s...", bot_id[:5]
+        )  # Log partial bot_id for privacy
         response = requests.post(
-            config.get("GROUPME_API_BASE_URL") + "/bots/post", json=payload, timeout=5
+            f"{GROUPME_API_BASE_URL.rstrip('/')}/bots/post", json=payload, timeout=10
         )
         response.raise_for_status()
-        logger.debug("GroupMe message sent successfully")
+        logger.debug("GroupMe message sent successfully.")
     except requests.exceptions.RequestException as e:
-        logger.error("Error sending GroupMe message: `%s`", e)
+        logger.error("Error sending GroupMe message to bot ID %s...: %s", bot_id[:5], e)
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error("Unexpected error sending GroupMe message: %s", e, exc_info=True)
 
 
-def main():
+def main_loop(publisher: Optional[RabbitMQPublisher]):
     """
     Monitor digital pin and send webhook on state change.
     """
-    prev_state = DIGITAL_PIN.value
-    prev_source = PRIMARY_SOURCE if prev_state else BACKUP_SOURCE
+    prev_pin_state = DIGITAL_PIN.value
+    prev_source = PRIMARY_SOURCE if prev_pin_state else BACKUP_SOURCE
     logger.info(
-        "%s initial state is %s (input source `%s`)", PIN_NAME, prev_state, prev_source
+        "%s initial state is %s (input source `%s`)",
+        PIN_NAME,
+        prev_pin_state,
+        prev_source,
     )
 
     # Wait for the pin to change state
     while True:
-        current_state = DIGITAL_PIN.value
-        current_source = PRIMARY_SOURCE if current_state else BACKUP_SOURCE
-        if current_state != prev_state:
-            logger.info("Source changed from `%s` to `%s`", prev_source, current_source)
-            persona = send_discord(current_source)
-            send_groupme(current_source)
+        try:
+            current_pin_state = DIGITAL_PIN.value
+            current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
 
-            # If we're switching to backup, attempt to send an email to
-            # the DJ who is currently on air.
-            if persona and persona.get("email") and current_source == BACKUP_SOURCE:
-                send_email(
-                    subject="ATTN: Failsafe Activated, Action Required",
-                    body=(
-                        "Hey! If you're getting this automated email, "
-                        "it means that the audio console in the WBOR "
-                        "studio has switched to the backup source due "
-                        "to a failure. Please double check that you "
-                        "are broadcasting something - if in doubt, "
-                        "turn the automation input on!\n\n"
-                        "If the automating input isn't working, find a "
-                        "radio safe playlist or CD to play on loop - DO"
-                        " NOT leave the station until you have reached "
-                        "out to someone from management to help you! "
-                        "\n\nThanks for your help keeping the stream "
-                        "live, and most importantly, FCC compliant!\n\n"
-                        "If you have any questions, please reach out to"
-                        " management at wbor@bowdoin.edu (do not reply "
-                        "to this email as it is unattended)."
-                    ),
-                    to=persona["email"],
+            if current_pin_state != prev_pin_state:
+                logger.info(
+                    "Source changed from `%s` (pin: %s) to `%s` (pin: %s)",
+                    prev_source,
+                    prev_pin_state,
+                    current_source,
+                    current_pin_state,
                 )
-                # Notify MGMT that an email was sent to the DJ.
-                send_discord_email_notification(persona)
 
-            # If an email wasn't found, send_discord() already handles
-            # sending a message to the DJ group.
+                playlist_data: Optional[Dict[str, Any]] = None
+                persona_data: Optional[Dict[str, Any]] = None
 
-            # Update state
-            prev_state = current_state
-            prev_source = current_source
-        time.sleep(0.5)
+                # Only fetch Spinitron if configured
+                if SPINITRON_API_BASE_URL:
+                    playlist_data = get_current_playlist()
+                    if playlist_data:
+                        persona_data = resolve_and_notify_dj(
+                            playlist_data, current_source
+                        )
+
+                # Send Discord Source Change Notification
+                if DISCORD_WEBHOOK_URL:
+                    send_discord_source_change(
+                        current_source, playlist_data, persona_data
+                    )
+
+                # Send GroupMe Management Notification
+                if GROUPME_BOT_ID_MGMT:
+                    send_groupme_notification(
+                        current_source, GROUPME_BOT_ID_MGMT, is_public_dj_alert=False
+                    )
+
+                # Publish to RabbitMQ
+                if publisher:
+                    rabbitmq_payload = {
+                        "source_application": "wbor-failsafe-notifier",
+                        "event_type": "source_change",
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "pin_name": PIN_NAME,
+                        "current_pin_state": current_pin_state,
+                        "active_source": current_source,
+                        "previous_active_source": prev_source,
+                        "details": {
+                            "playlist": playlist_data if playlist_data else {},
+                            "persona": persona_data if persona_data else {},
+                        },
+                    }
+                    logger.info(
+                        "Publishing source change event to RabbitMQ with routing key `%s`.",
+                        RABBITMQ_ROUTING_KEY,
+                    )
+                    if not publisher.publish(RABBITMQ_ROUTING_KEY, rabbitmq_payload):
+                        logger.error(
+                            "Failed to publish source change event to RabbitMQ."
+                        )
+
+                prev_pin_state = current_pin_state
+                prev_source = current_source
+
+            time.sleep(0.5)  # Check interval for pin state
+
+        except (
+            Exception  # pylint: disable=broad-except
+        ) as e:  # Catchall for errors within the loop to keep notifier running
+            logger.error("Error in main monitoring loop: %s", e, exc_info=True)
+            time.sleep(10)
+
+
+def main():
+    """
+    Primary entry point for the WBOR Failsafe Notifier.
+    """
+    global rabbitmq_publisher  # Make it global to be accessible in "finally"
+    rabbitmq_publisher = None
+    try:
+        logger.info("Starting WBOR Failsafe Notifier v1.3.0...")
+        logger.info(
+            "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
+            PRIMARY_SOURCE,
+            BACKUP_SOURCE,
+            PIN_NAME,
+        )
+
+        rabbitmq_publisher = initialize_rabbitmq()
+        main_loop(rabbitmq_publisher)
+
+    except ValueError as e:  # For critical config errors before loop
+        logger.critical("Configuration error: %s. Exiting.", e)
+    except RuntimeError as e:  # For pin init errors
+        logger.critical("Runtime initialization error: %s. Exiting.", e)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received. Shutting down...")
+    except Exception as e:  # pylint: disable=broad-except
+        logger.critical("An unexpected critical error occurred: %s", e, exc_info=True)
+    finally:
+        logger.info("WBOR Failsafe Notifier shutting down.")
+        if rabbitmq_publisher:
+            rabbitmq_publisher.close()
 
 
 if __name__ == "__main__":
