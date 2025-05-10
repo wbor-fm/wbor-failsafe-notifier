@@ -344,6 +344,9 @@ def send_discord(current_source: str) -> dict:
             ] = f"Switched back to primary source `{current_source}`"
 
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
+        payload["embeds"][0]["footer"] = {
+            "text": "Powered by WBOR-91-1-FM/wbor-failsafe-notifier",
+        }
         response = requests.post(
             config.get("DISCORD_WEBHOOK_URL"), json=payload, timeout=5
         )
