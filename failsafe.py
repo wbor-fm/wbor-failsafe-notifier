@@ -4,7 +4,7 @@ webhook notification when the input state changes. It distinguishes
 between primary and backup sources based on the configured pin state.
 
 Author: Mason Daugherty <@mdrxy>
-Version: 1.3.1
+Version: 1.3.2
 Last Modified: 2025-05-10
 
 Changelog:
@@ -14,6 +14,7 @@ Changelog:
         and refactored code for better readability and maintainability.
     - 1.3.1 (2025-05-10): Refactored to remove global statement for
         RabbitMQ publisher.
+    - 1.3.2 (2025-05-10): Timezone and wording fixes
 """
 
 import copy
@@ -780,7 +781,7 @@ def main():
     """
     local_rabbitmq_publisher: Optional[RabbitMQPublisher] = None
     try:
-        logger.info("Starting WBOR Failsafe Notifier v1.3.1...")
+        logger.info("Starting WBOR Failsafe Notifier v1.3.2...")
         logger.info(
             "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
             PRIMARY_SOURCE,
