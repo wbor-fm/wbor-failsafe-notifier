@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 import board
 import digitalio
+import pytz
 import requests
 from dotenv import dotenv_values
 
@@ -371,23 +372,63 @@ def send_discord_source_change(
 
     fields = []
     thumb_url = None
+    eastern_tz = pytz.timezone("America/New_York")
 
     if playlist_info:
         thumb_url = playlist_info.get("image")
-        start_time_str = (
-            datetime.fromisoformat(playlist_info["start"]).strftime(
-                "%Y-%m-%d %I:%M %p ET"
-            )
-            if playlist_info.get("start")
-            else "N/A"
-        )
-        end_time_str = (
-            datetime.fromisoformat(playlist_info["end"]).strftime(
-                "%Y-%m-%d %I:%M %p ET"
-            )
-            if playlist_info.get("end")
-            else "N/A"
-        )
+        start_time_str = "N/A"
+        if playlist_info.get("start"):
+            try:
+                # Spinitron 'start' and 'end' are typically ISO 8601 UTC strings
+                utc_dt = datetime.fromisoformat(playlist_info["start"])
+
+                # If fromisoformat results in a naive datetime (no tzinfo), assume it's UTC
+                if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
+                    utc_dt = utc_dt.replace(tzinfo=timezone.utc)  # Make it UTC aware
+
+                eastern_dt = utc_dt.astimezone(eastern_tz)  # Convert to Eastern Time
+                start_time_str = eastern_dt.strftime(
+                    "%Y-%m-%d %I:%M %p %Z"
+                )  # %Z will add EST/EDT
+            except ValueError as e:
+                logger.warning(
+                    "Could not parse start time from Spinitron: %s - %s",
+                    playlist_info["start"],
+                    e,
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                logger.error(
+                    "Error converting start time %s to Eastern: %s",
+                    playlist_info["start"],
+                    e,
+                    exc_info=True,
+                )
+
+        end_time_str = "N/A"
+        if playlist_info.get("end"):
+            try:
+                utc_dt = datetime.fromisoformat(playlist_info["end"])
+
+                if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
+                    utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+
+                eastern_dt = utc_dt.astimezone(eastern_tz)
+                end_time_str = eastern_dt.strftime(
+                    "%Y-%m-%d %I:%M %p %Z"
+                )  # %Z will add EST/EDT
+            except ValueError as e:
+                logger.warning(
+                    "Could not parse end time from Spinitron: %s - %s",
+                    playlist_info["end"],
+                    e,
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                logger.error(
+                    "Error converting end time %s to Eastern: %s",
+                    playlist_info["end"],
+                    e,
+                    exc_info=True,
+                )
         fields.append(
             {
                 "name": "Playlist",
@@ -418,7 +459,7 @@ def send_discord_source_change(
         embed["title"] = "FAILSAFE ACTIVATED (Backup Source)"
         embed["description"] = (
             f"Switched to backup source **`{current_source}`**. "
-            "Primary source may have failed. Investigation may be required."
+            "Primary source may have failed. Investigate this!"
         )
     else:
         # Switched back to primary
@@ -543,7 +584,7 @@ def resolve_and_notify_dj(
             )
             email_body = (
                 f"Hey {dj_name_to_notify}!\n\nThis is an automated message from WBOR's Failsafe "
-                "Gadget.\n\n It appears the station has switched to the backup audio source during "
+                "Gadget.\n\nIt appears the station has switched to the backup audio source during "
                 f"your show '{playlist.get('title', 'N/A')}'. This usually means there's an issue "
                 "with the audio from the audio console (e.g., dead air, incorrect input selected, "
                 "or equipment malfunction).\n\n Please check the following:\n"
@@ -554,7 +595,8 @@ def resolve_and_notify_dj(
                 "something (e.g., put automation on if available and working, or a long, clean "
                 "music track) and contact station management immediately for assistance.\n\n"
                 "Do not reply to this email as it is unattended. Contact management via "
-                "wbor@bowdoin.edu or other channels.\n\nThanks for your help!"
+                "wbor@bowdoin.edu or other channels.\n\nThanks for your help!\n-mgmt\n\n"
+                "Automated message sent by WBOR-91-1-FM/wbor-failsafe-notifier"
             )
             send_email(
                 subject="ATTN: WBOR Failsafe Activated - Action Required During Your Show",
@@ -617,7 +659,7 @@ def send_groupme_notification(
         else:  # Management alert
             text_message = (
                 f"⚠️ FAILSAFE ACTIVATED ⚠️\nWBOR has switched to backup source `{current_source}`. "
-                "Primary source may have failed. Investigation may be required."
+                "Primary source may have failed. Investigate this!"
             )
     else:  # Switched back to primary
         text_message = (
