@@ -151,6 +151,19 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
     sudo journalctl -u wbor-failsafe-notifier.service -f
     ```
 
+To update the code, simply pull the latest changes from the repository:
+
+```bash
+cd wbor-failsafe-notifier
+git pull origin main
+```
+
+Then restart the service to apply the changes:
+
+```bash
+sudo systemctl restart wbor-failsafe-notifier.service
+```
+
 ## References
 
 * [Angry Audio Failsafe Gadget](https://angryaudio.com/failsafegadget/)
