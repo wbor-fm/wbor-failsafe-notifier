@@ -164,6 +164,14 @@ Then restart the service to apply the changes:
 sudo systemctl restart wbor-failsafe-notifier.service
 ```
 
+## TODO
+
+Pull requests are welcome! Here are some ideas for future improvements:
+
+* [ ] Make timezone setting configurable for users outside of ET.
+* [ ] Allow for multiple pins to be monitored (e.g., for multiple Failsafe Gadgets).
+* [ ] Add support for other notification services (e.g., Slack, SMS).
+
 ## References
 
 * [Angry Audio Failsafe Gadget](https://angryaudio.com/failsafegadget/)
