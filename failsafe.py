@@ -4,7 +4,7 @@ webhook notification when the input state changes. It distinguishes
 between primary and backup sources based on the configured pin state.
 
 Author: Mason Daugherty <@mdrxy>
-Version: 1.3.2
+Version: 1.3.3
 Last Modified: 2025-05-10
 
 Changelog:
@@ -15,6 +15,8 @@ Changelog:
     - 1.3.1 (2025-05-10): Refactored to remove global statement for
         RabbitMQ publisher.
     - 1.3.2 (2025-05-10): Timezone and wording fixes
+    - 1.3.3 (2025-05-16): Link the playlist in the email notification
+        embed
 """
 
 import copy
@@ -493,7 +495,10 @@ def send_discord_source_change(
 
 
 def send_discord_email_alert(
-    dj_name: str, dj_email: str, playlist_title: Optional[str]
+    dj_name: str,
+    dj_email: str,
+    playlist_title: Optional[str],
+    playlist_url: Optional[str],
 ) -> None:
     """
     Sends a Discord notification about the email sent to the DJ.
@@ -512,8 +517,13 @@ def send_discord_email_alert(
         "regarding the failsafe activation for their show. Check if the DJ is "
         "aware and needs assistance."
     )
+
+    playlist_str = (
+        f"[{playlist_title}]({playlist_url})" if playlist_url else playlist_title
+    )
+
     if playlist_title:
-        embed["fields"] = [{"name": "Show Currently On-Air", "value": playlist_title}]
+        embed["fields"] = [{"name": "Playlist Currently On-Air", "value": playlist_str}]
     send_discord_notification(payload)
 
 
@@ -524,7 +534,8 @@ def resolve_and_notify_dj(
     Resolves the DJ's email and sends notifications if necessary.
 
     Parameters:
-    - playlist (dict): The current playlist data.
+    - playlist (dict): The current playlist data (unmodified from
+        Spinitron).
     - current_source (str): The current source (A or B).
 
     Returns:
@@ -614,8 +625,17 @@ def resolve_and_notify_dj(
                 body=email_body,
                 to_email=dj_email_to_notify,
             )
+
+            playlist_url = (
+                f"{SPINITRON_API_BASE_URL}/playlists/{playlist.get('id')}"
+                if SPINITRON_API_BASE_URL and playlist.get("id")
+                else None
+            )
             send_discord_email_alert(
-                dj_name_to_notify, dj_email_to_notify, playlist.get("title")
+                dj_name_to_notify,
+                dj_email_to_notify,
+                playlist.get("title"),
+                playlist_url,
             )
             persona_info_for_event["email_notified"] = dj_email_to_notify
         else:
@@ -792,7 +812,7 @@ def main():
     """
     local_rabbitmq_publisher: Optional[RabbitMQPublisher] = None
     try:
-        logger.info("Starting WBOR Failsafe Notifier v1.3.2...")
+        logger.info("Starting WBOR Failsafe Notifier v1.3.3...")
         logger.info(
             "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
             PRIMARY_SOURCE,
