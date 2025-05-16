@@ -62,6 +62,9 @@ if missing_configs:
     raise ValueError(CFG_ERR_MSG)
 
 PIN_NAME = config.get("PIN_ASSIGNMENT")
+if PIN_NAME is None:
+    logger.critical("PIN_ASSIGNMENT is not set in the configuration.")
+    raise ValueError("PIN_ASSIGNMENT must be set in the configuration.")
 try:
     pin = getattr(board, PIN_NAME)
 except AttributeError as exc:
@@ -127,7 +130,7 @@ ERROR_EMAIL = config.get("ERROR_EMAIL")
 
 # RabbitMQ config
 RABBITMQ_AMQP_URL = config.get("RABBITMQ_AMQP_URL")
-RABBITMQ_EXCHANGE_NAME = config.get("RABBITMQ_EXCHANGE_NAME", "wbor_failsafe_events")
+RABBITMQ_EXCHANGE_NAME = config.get("RABBITMQ_EXCHANGE_NAME") or "wbor_failsafe_events"
 RABBITMQ_ROUTING_KEY = config.get(
     "RABBITMQ_ROUTING_KEY",
     "notification.failsafe-status",
@@ -206,15 +209,20 @@ def send_email(subject: str, body: str, to_email: str) -> None:
     - body (str): The body of the email.
     - to_email (str): The recipient's email address.
     """
-    if not all(
-        [SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, FROM_EMAIL, to_email]
-    ):
-        logger.warning(
-            "SMTP settings or recipient email not fully configured. Cannot send email."
-        )
-        return
-
     logger.info("Attempting to send email to `%s` with subject: %s", to_email, subject)
+
+    if not SMTP_SERVER:
+        logger.error("SMTP_SERVER is not set, cannot send email.")
+        return
+    if not SMTP_USERNAME:
+        logger.error("SMTP_USERNAME is not set, cannot send email.")
+        return
+    if not SMTP_PASSWORD:
+        logger.error("SMTP_PASSWORD is not set, cannot send email.")
+        return
+    if not FROM_EMAIL:
+        logger.error("FROM_EMAIL is not set, cannot send email.")
+        return
     try:
         msg = MIMEText(body)
         msg["Subject"] = subject
@@ -368,7 +376,7 @@ def send_discord_source_change(
     - playlist_info (dict): Information about the current playlist.
     - persona_info (dict): Information about the DJ.
     """
-    payload = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
+    payload: Dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
     embed = payload["embeds"][0]
 
     fields = []
@@ -451,8 +459,10 @@ def send_discord_source_change(
                 else dj_name
             )
             fields.append({"name": "DJ", "value": dj_value})
-        fields.append({"name": "Start Time", "value": start_time_str, "inline": True})
-        fields.append({"name": "End Time", "value": end_time_str, "inline": True})
+        fields.append(
+            {"name": "Playlist Start", "value": start_time_str, "inline": True}
+        )
+        fields.append({"name": "Playlist End", "value": end_time_str, "inline": True})
 
     if current_source == BACKUP_SOURCE:
         payload["content"] = "@everyone - Stream May Be Down!"  # Ping everyone
@@ -758,8 +768,9 @@ def main_loop(
                         "Publishing source change event to RabbitMQ with routing key `%s`.",
                         RABBITMQ_ROUTING_KEY,
                     )
+                    routing_key = RABBITMQ_ROUTING_KEY or "notification.failsafe-status"
                     if not local_rabbitmq_publisher.publish(
-                        RABBITMQ_ROUTING_KEY, rabbitmq_payload
+                        routing_key, rabbitmq_payload
                     ):
                         logger.error(
                             "Failed to publish source change event to RabbitMQ."
