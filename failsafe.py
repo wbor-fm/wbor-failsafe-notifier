@@ -47,7 +47,7 @@ if not config:
     )
     import os as _os
 
-    config = _os.environ
+    config = dict(_os.environ)
 
 
 required_configs = [
@@ -508,8 +508,8 @@ def send_discord_email_alert(
     - dj_email (str): The email address of the DJ.
     - playlist_title (str): The title of the playlist.
     """
-    payload = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
-    embed = payload["embeds"][0]
+    payload: Dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
+    embed: Dict[str, Any] = payload["embeds"][0]
     embed["title"] = "Failsafe Gadget - DJ Email Notification Sent"
     embed["color"] = DISCORD_EMBED_WARNING_COLOR
     embed["description"] = (
