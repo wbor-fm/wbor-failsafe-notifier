@@ -6,11 +6,11 @@ WBOR uses Angry Audio's [Failsafe Gadget](https://angryaudio.com/failsafegadget/
 
 Ideally, a member of station management should be notified when source B becomes active, as it indicates a failure with the audio console (since it stopped producing a signal). This is where some handy scripting comes in!
 
-On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and a Raspberry Pi, we can read the logic port status in Python. In our case, we want to send a message to a Discord channel, GroupMe group, or publish to a RabbitMQ exchange when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
+On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and an ARM single-board computer (e.g. a Raspberry Pi), we can read the logic port status in Python. In our case, we want to send a message to a Discord channel, GroupMe group, or publish to a RabbitMQ exchange when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
 
 ![Failsafe Gadget DB9 Pinout](/images/aa-pinout.png)
 
-If you don't have a Pi with GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our Pi is inside a case. Consequently, our code and instructions will be written with that in mind.
+If you don't have direct access to GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our board is inside a case. Consequently, our code and instructions will be written with that in mind.
 
 ## Notification Options
 
@@ -25,8 +25,8 @@ The script is written to suit our needs, but you can easily modify it to suit yo
 
 ## Hardware
 
-* **Raspberry Pi**: Pretty much any model will work, but we used a Pi 5 for this project since it was already in the studio running other apps.
-* **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use a Raspberry Pi with GPIO pins if you prefer to go in directly, ***but may need to modify the code!***
+* **ARM Single-Board Computer**: Pretty much any modern ARM-based single-board computer will work for this project (such as a Raspberry Pi).
+* **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use GPIO pins directly if your board supports them, ***but may need to modify the code!***
 * **[DB9 Breakout Connector](https://amazon.com/dp/B09L7JWNDQ)**: This is used to connect to the Failsafe Gadget's logic port.
 * and finally, standard [breadboard jumper wires](https://amazon.com/dp/B07GD2BWPY) to make connections.
 
@@ -121,9 +121,9 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
 
 9. Set up the systemd service to run the script in the background:
 
-    We have our script installed to `/home/pi5/Scripts/wbor-failsafe-notifier` (`pi5` is our Pi's username). ***If you installed it somewhere else, make sure to update the paths in the service file accordingly.*** Likewise, if your username is different, update the `User=` line in the service file.
+    We have our script installed to `/home/$USER/Scripts/wbor-failsafe-notifier`. ***If you installed it somewhere else, make sure to update the paths in the service file accordingly.*** Likewise, if your username is different, update the `User=` line in the service file.
 
-    `Environment=BLINKA_FT232H=1` is required to use the FT232H USB to JTAG serial converter. If you remove this, the script will not work. If you are using a Raspberry Pi with GPIO pins, you can remove this line from the service file (and ensure your `PIN_ASSIGNMENT` in `.env` corresponds to Broadcom/BCM pin names recognized by `board`, e.g., `D17` for GPIO17).
+    `Environment=BLINKA_FT232H=1` is required to use the FT232H USB to JTAG serial converter. If you remove this, the script will not work. If you are using GPIO pins directly, you can remove this line from the service file (and ensure your `PIN_ASSIGNMENT` in `.env` corresponds to Broadcom/BCM pin names recognized by `board`, e.g., `D17` for GPIO17).
 
     ```bash
     sudo cp wbor-failsafe-notifier.service /etc/systemd/system/
