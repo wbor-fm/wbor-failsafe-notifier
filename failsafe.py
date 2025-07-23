@@ -1,11 +1,11 @@
 """
-Monitors a digital input on a microcontroller board and sends a Discord
-webhook notification when the input state changes. It distinguishes
-between primary and backup sources based on the configured pin state.
+Monitors a digital input on a microcontroller board and sends a Discord webhook
+notification when the input state changes. It distinguishes between primary and
+backup sources based on the configured pin state.
 
 Author: Mason Daugherty <@mdrxy>
-Version: 1.3.3
-Last Modified: 2025-05-10
+Version: 1.4.0
+Last Modified: 2025-07-23
 
 Changelog:
     - 1.0.0 (2025-03-22): Initial release.
@@ -17,13 +17,15 @@ Changelog:
     - 1.3.2 (2025-05-10): Timezone and wording fixes
     - 1.3.3 (2025-05-16): Link the playlist in the email notification
         embed
+    - 1.4.0 (2025-07-23): Added RabbitMQ consumer for temporary override
+        functionality and hourly health check messaging
 """
 
 import copy
 import logging
 import smtplib
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from typing import Any, Dict, Optional
 
@@ -35,6 +37,7 @@ from dotenv import dotenv_values
 
 from utils.logging import configure_logging
 from utils.rabbitmq_publisher import RabbitMQPublisher
+from utils.rabbitmq_consumer import RabbitMQConsumer
 
 logging.root.handlers = []
 logger = configure_logging()
@@ -137,6 +140,13 @@ RABBITMQ_ROUTING_KEY = config.get(
     "RABBITMQ_ROUTING_KEY",
     "notification.failsafe-status",
 )
+RABBITMQ_OVERRIDE_QUEUE = config.get("RABBITMQ_OVERRIDE_QUEUE") or "wbor_failsafe_override"
+RABBITMQ_HEALTHCHECK_ROUTING_KEY = config.get("RABBITMQ_HEALTHCHECK_ROUTING_KEY") or "health.failsafe-status"
+
+# Global state for temporary override functionality
+override_active = False
+override_end_time = None
+last_healthcheck_time = None
 
 
 def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
@@ -164,6 +174,123 @@ def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
             "RabbitMQ AMQP URL not configured. RabbitMQ publishing will be disabled."
         )
     return None
+
+
+def initialize_rabbitmq_consumer() -> Optional[RabbitMQConsumer]:
+    """
+    Initializes and returns RabbitMQConsumer if configured.
+    """
+    if RABBITMQ_AMQP_URL:
+        try:
+            consumer = RabbitMQConsumer(
+                amqp_url=RABBITMQ_AMQP_URL,
+                queue_name=RABBITMQ_OVERRIDE_QUEUE,
+                exchange_name=RABBITMQ_EXCHANGE_NAME,
+                routing_key="command.failsafe-override",
+                callback=handle_override_message,
+            )
+            logger.info(
+                "RabbitMQ consumer initialized for queue `%s`.",
+                RABBITMQ_OVERRIDE_QUEUE,
+            )
+            return consumer
+        except Exception as e:
+            logger.error(
+                "Failed to initialize RabbitMQ consumer: `%s`. Proceeding without override functionality.",
+                e,
+                exc_info=True,
+            )
+    else:
+        logger.info(
+            "RabbitMQ AMQP URL not configured. Override functionality will be disabled."
+        )
+    return None
+
+
+def handle_override_message(message: Dict[str, Any]) -> None:
+    """
+    Handle incoming override messages from RabbitMQ.
+    
+    Expected message format:
+    ```
+    {"action": "enable_override", "duration_minutes": 5}
+    ```
+
+    If `duration_minutes` is not provided, defaults to 5 minutes.
+    """
+    global override_active, override_end_time
+    
+    try:
+        action = message.get("action")
+        if action == "enable_override":
+            duration_minutes = message.get("duration_minutes", 5)
+            override_active = True
+            override_end_time = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+            
+            logger.info(
+                "Temporary override activated for %d minutes (until %s UTC)",
+                duration_minutes,
+                override_end_time.isoformat(),
+            )
+            
+        elif action == "disable_override":
+            override_active = False
+            override_end_time = None
+            logger.info("Temporary override manually disabled")
+            
+        else:
+            logger.warning("Unknown override action received: %s", action) 
+            
+    except Exception as e:
+        logger.error("Error processing override message: %s", e, exc_info=True)
+
+
+def check_override_expiry() -> None:
+    """
+    Check if the temporary override has expired and disable it if so.
+    """
+    global override_active, override_end_time
+    
+    if override_active and override_end_time:
+        current_time = datetime.now(timezone.utc)
+        if current_time >= override_end_time:
+            override_active = False
+            override_end_time = None
+            logger.info("Temporary override expired/disabled: returning to normal operation")
+
+
+def send_health_check(publisher: Optional[RabbitMQPublisher]) -> None:
+    """
+    Send a health check message to RabbitMQ indicating the system is alive.
+    """
+    global last_healthcheck_time
+    
+    if not publisher:
+        return
+        
+    current_time = datetime.now(timezone.utc)
+    
+    # Send health check every hour
+    if (last_healthcheck_time is None or 
+        current_time - last_healthcheck_time >= timedelta(hours=1)):
+        
+        health_payload = {
+            "source_application": "wbor-failsafe-notifier",
+            "event_type": "health_check",
+            "timestamp_utc": current_time.isoformat(),
+            "status": "alive",
+            "pin_name": PIN_NAME,
+            "current_pin_state": DIGITAL_PIN.value,
+            "active_source": PRIMARY_SOURCE if DIGITAL_PIN.value else BACKUP_SOURCE,
+            "override_active": override_active,
+            "override_end_time": override_end_time.isoformat() if override_end_time else None,
+        }
+        
+        if publisher.publish(RABBITMQ_HEALTHCHECK_ROUTING_KEY, health_payload):
+            last_healthcheck_time = current_time
+            logger.info("Health check message sent successfully")
+        else:
+            logger.error("Failed to send health check message")
 
 
 def api_get(endpoint: str) -> Optional[dict]:
@@ -719,6 +846,7 @@ def send_groupme_notification(
 
 def main_loop(
     local_rabbitmq_publisher: Optional[RabbitMQPublisher],
+    local_rabbitmq_consumer: Optional[RabbitMQConsumer],
 ):
     """
     Monitor digital pin and send webhook on state change.
@@ -732,11 +860,32 @@ def main_loop(
         prev_source,
     )
 
+    # Start the RabbitMQ consumer if available
+    if local_rabbitmq_consumer:
+        if local_rabbitmq_consumer.start_consuming():
+            logger.info("RabbitMQ consumer started successfully")
+        else:
+            logger.error("Failed to start RabbitMQ consumer")
+
     # Wait for the pin to change state
     while True:
         try:
+            # Check for override expiry
+            check_override_expiry()
+            
+            # Send health check if needed
+            send_health_check(local_rabbitmq_publisher)
+            
             current_pin_state = DIGITAL_PIN.value
             current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
+
+            # Check if we should skip processing due to active override
+            if override_active:
+                logger.debug("Override is active, skipping state change processing")
+                prev_pin_state = current_pin_state
+                prev_source = current_source
+                time.sleep(0.5)
+                continue
 
             if current_pin_state != prev_pin_state:
                 logger.info(
@@ -811,8 +960,9 @@ def main():
     Primary entry point for the WBOR Failsafe Notifier.
     """
     local_rabbitmq_publisher: Optional[RabbitMQPublisher] = None
+    local_rabbitmq_consumer: Optional[RabbitMQConsumer] = None
     try:
-        logger.info("Starting WBOR Failsafe Notifier v1.3.3...")
+        logger.info("Starting WBOR Failsafe Notifier v1.4.0...")
         logger.info(
             "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
             PRIMARY_SOURCE,
@@ -821,7 +971,8 @@ def main():
         )
 
         local_rabbitmq_publisher = initialize_rabbitmq()
-        main_loop(local_rabbitmq_publisher)
+        local_rabbitmq_consumer = initialize_rabbitmq_consumer()
+        main_loop(local_rabbitmq_publisher, local_rabbitmq_consumer)
 
     except ValueError as e:
         logger.critical("Configuration error: %s. Exiting.", e)
@@ -833,6 +984,8 @@ def main():
         logger.critical("An unexpected critical error occurred: %s", e, exc_info=True)
     finally:
         logger.info("WBOR Failsafe Notifier shutting down.")
+        if local_rabbitmq_consumer:
+            local_rabbitmq_consumer.stop_consuming()
         if local_rabbitmq_publisher:
             local_rabbitmq_publisher.close()
         logger.info("Shutdown complete.")
