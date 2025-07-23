@@ -6,11 +6,11 @@ WBOR uses Angry Audio's [Failsafe Gadget](https://angryaudio.com/failsafegadget/
 
 Ideally, a member of station management should be notified when source B becomes active, as it indicates a failure with the audio console (since it stopped producing a signal). This is where some handy scripting comes in!
 
-On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and a Raspberry Pi, we can read the logic port status in Python. In our case, we want to send a message to a Discord channel, GroupMe group, or publish to a RabbitMQ exchange when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
+On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and an ARM single-board computer (e.g. a Raspberry Pi), we can read the logic port status in Python. In our case, we want to send a message to a Discord channel, GroupMe group, or publish to a RabbitMQ exchange when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
 
 ![Failsafe Gadget DB9 Pinout](/images/aa-pinout.png)
 
-If you don't have a Pi with GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our Pi is inside a case. Consequently, our code and instructions will be written with that in mind.
+If you don't have direct access to GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our board is inside a case. Consequently, our code and instructions will be written with that in mind.
 
 ## Notification Options
 
@@ -25,8 +25,8 @@ The script is written to suit our needs, but you can easily modify it to suit yo
 
 ## Hardware
 
-* **Raspberry Pi**: Pretty much any model will work, but we used a Pi 5 for this project since it was already in the studio running other apps.
-* **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use a Raspberry Pi with GPIO pins if you prefer to go in directly, ***but may need to modify the code!***
+* **ARM Single-Board Computer**: Pretty much any modern ARM-based single-board computer will work for this project (such as a Raspberry Pi).
+* **[FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P)**: Used in our case to read the logic port status from the Failsafe Gadget. You can also use GPIO pins directly if your board supports them, ***but may need to modify the code!***
 * **[DB9 Breakout Connector](https://amazon.com/dp/B09L7JWNDQ)**: This is used to connect to the Failsafe Gadget's logic port.
 * and finally, standard [breadboard jumper wires](https://amazon.com/dp/B07GD2BWPY) to make connections.
 
@@ -61,7 +61,7 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
 5. Install the required packages:
 
     ```bash
-    pip install -r requirements.txt
+    uv sync
     ```
 
 6. Copy the sample `.env.sample` file to `.env`:
@@ -81,7 +81,7 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
     * `DISCORD_WEBHOOK_URL` (Required if using Discord)
     * `GROUPME_BOT_ID_MGMT`, `GROUPME_BOT_ID_DJS`, `GROUPME_API_BASE_URL` (Required if using GroupMe)
     * Email settings (`SMTP_SERVER`, `SMTP_PORT`, etc.) if using email notifications.
-    * Optional settings like `AUTHOR_NAME`, `SPINITRON_API_BASE_URL`.
+    * Optional settings like `AUTHOR_NAME`, `SPINITRON_API_BASE_URL`, `TIMEZONE`.
 
     **RabbitMQ Integration (Optional)**
 
@@ -121,9 +121,9 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
 
 9. Set up the systemd service to run the script in the background:
 
-    We have our script installed to `/home/pi5/Scripts/wbor-failsafe-notifier` (`pi5` is our Pi's username). ***If you installed it somewhere else, make sure to update the paths in the service file accordingly.*** Likewise, if your username is different, update the `User=` line in the service file.
+    We have our script installed to `/home/$USER/Scripts/wbor-failsafe-notifier`. ***If you installed it somewhere else, make sure to update the paths in the service file accordingly.*** Likewise, if your username is different, update the `User=` line in the service file.
 
-    `Environment=BLINKA_FT232H=1` is required to use the FT232H USB to JTAG serial converter. If you remove this, the script will not work. If you are using a Raspberry Pi with GPIO pins, you can remove this line from the service file (and ensure your `PIN_ASSIGNMENT` in `.env` corresponds to Broadcom/BCM pin names recognized by `board`, e.g., `D17` for GPIO17).
+    `Environment=BLINKA_FT232H=1` is required to use the FT232H USB to JTAG serial converter. If you remove this, the script will not work. If you are using GPIO pins directly, you can remove this line from the service file (and ensure your `PIN_ASSIGNMENT` in `.env` corresponds to Broadcom/BCM pin names recognized by `board`, e.g., `D17` for GPIO17).
 
     ```bash
     sudo cp wbor-failsafe-notifier.service /etc/systemd/system/
@@ -164,11 +164,153 @@ Then restart the service to apply the changes:
 sudo systemctl restart wbor-failsafe-notifier.service
 ```
 
+## Development
+
+### Prerequisites
+
+* Python 3.9 or higher
+* [uv](https://docs.astral.sh/uv/) package manager
+
+### Development Setup
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier.git
+   cd wbor-failsafe-notifier
+   ```
+
+2. **Install dependencies using uv (recommended):**
+
+   ```bash
+   uv sync --dev
+   ```
+
+   Or using traditional pip:
+
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -e .[dev]
+   ```
+
+3. **Set up environment configuration:**
+
+   ```bash
+   cp .env.sample .env
+   # Edit .env with your configuration
+   ```
+
+### Code Quality and Linting
+
+This project uses [Ruff](https://ruff.rs/) for linting and code formatting, and [mypy](https://mypy-lang.org/) for static type checking. The configuration follows modern Python standards with Google-style docstrings.
+
+#### Using Make targets
+
+```bash
+# Format code automatically
+make format
+
+# Run linting checks
+make lint
+
+# Run type checking
+make typecheck
+
+# Format code automatically with potentially unsafe fixes
+make lint-unsafe-fix
+
+# Run both formatting, linting, and type checking
+make check
+```
+
+### Running in Development
+
+```bash
+# Using uv
+BLINKA_FT232H=1 uv run python failsafe.py
+
+# Using traditional python
+BLINKA_FT232H=1 python failsafe.py
+```
+
+### Configuration
+
+The application supports the following configuration options in `.env`:
+
+#### Core Settings (Required)
+
+* `PIN_ASSIGNMENT`: GPIO pin name (e.g., "D18")
+
+* `BACKUP_INPUT`: Which input is backup ("A" or "B")
+
+#### Display Settings (Optional)
+
+* `TIMEZONE`: Timezone for log timestamps and playlist times (default: "America/New_York")
+  * Examples: "America/Los_Angeles", "Europe/London", "Asia/Tokyo"
+  * Uses standard IANA timezone names
+  * Invalid timezones will fall back to "America/New_York"
+  * **Note**: Defaults to New York timezone if not specified
+
+#### RabbitMQ Settings (Optional)
+
+* `RABBITMQ_AMQP_URL`: RabbitMQ connection URL
+
+* `RABBITMQ_EXCHANGE_NAME`: Exchange name (default: `'wbor_failsafe_events'`)
+* `RABBITMQ_ROUTING_KEY`: Routing key for notifications (default: `'notification.failsafe-status'`)
+* `RABBITMQ_OVERRIDE_QUEUE`: Queue for override commands (default: `'wbor_failsafe_override'`)
+* `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Health check routing key (default: `'health.failsafe-status'`)
+
+#### Temporary Override Feature
+
+Send messages to the override queue to temporarily disable failsafe processing:
+
+```json
+{
+  "action": "enable_override",
+  "duration_minutes": 5  # Optional, defaults to 5 minutes
+}
+```
+
+#### Health Check Messages
+
+The system sends hourly health check messages to RabbitMQ containing:
+
+* System status ("alive")
+* Current pin state
+* Active source
+* Override status
+
+### Project Structure
+
+```txt
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # CI/CD pipeline
+├── failsafe.py               # Main application
+├── utils/
+│   ├── logging.py            # Logging configuration
+│   ├── rabbitmq_publisher.py # RabbitMQ publishing
+│   └── rabbitmq_consumer.py  # RabbitMQ consuming
+├── pyproject.toml            # Project configuration
+├── Makefile                  # Development commands
+├── uv.lock                   # Dependency lock file
+└── requirements.txt          # Python dependencies (legacy)
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and ensure they pass linting: `make check`
+4. Commit your changes: `git commit -am 'Add feature'`
+5. Push to the branch: `git push origin feature-name`, following a conventional commit style (e.g., `feat: add new feature xyz`)
+6. Submit a pull request
+
 ## TODO
 
 Pull requests are welcome! Here are some ideas for future improvements:
 
-* [ ] Make timezone setting configurable for users outside of ET.
 * [ ] Allow for multiple pins to be monitored (e.g., for multiple Failsafe Gadgets).
 * [ ] Add support for other notification services (e.g., Slack, SMS).
 
