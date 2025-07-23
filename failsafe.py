@@ -30,8 +30,6 @@ import smtplib
 import time
 from typing import Any
 
-import board
-import digitalio
 from dotenv import dotenv_values
 import pytz
 import requests
@@ -40,15 +38,47 @@ from utils.logging import configure_logging
 from utils.rabbitmq_consumer import RabbitMQConsumer
 from utils.rabbitmq_publisher import RabbitMQPublisher
 
-# Load configuration first to get timezone
+# Load configuration first to check for dry run mode
 config = dotenv_values(".env")
 if not config:
     import os as _os
 
     config = dict(_os.environ)
 
+# Hardware imports - skip in dry run mode to avoid hardware dependencies
+if (config.get("DRY_RUN") or "").lower() not in ("true", "1", "yes"):
+    import board
+    import digitalio
+else:
+    # Mock board and digitalio for dry run
+    class MockBoard:
+        """Mock board class for dry run mode."""
+
+        def __getattr__(self, name: str) -> str:
+            """Return mock pin name for any attribute access."""
+            return f"mock_pin_{name}"
+
+    class MockDigitalIO:
+        """Mock digitalio module for dry run mode."""
+
+        class DigitalInOut:
+            """Mock digital input/output pin for dry run mode."""
+
+            def __init__(self, _pin: str) -> None:
+                """Initialize mock pin with default state."""
+                self.value = False
+
+            def switch_to_input(self) -> None:
+                """Mock method to switch pin to input mode."""
+
+    board = MockBoard()
+    digitalio = MockDigitalIO()
+
 # Get timezone early for logger configuration
 TIMEZONE = config.get("TIMEZONE") or "America/New_York"
+
+# Check for dry run mode (used in CI/testing)
+DRY_RUN = (config.get("DRY_RUN") or "").lower() in ("true", "1", "yes")
 
 # Initialize logging with configured timezone
 logging.root.handlers = []
@@ -90,27 +120,46 @@ if PIN_NAME is None:
     logger.critical("PIN_ASSIGNMENT is not set in the configuration.")
     msg = "PIN_ASSIGNMENT must be set in the configuration."
     raise ValueError(msg)
-try:
-    pin = getattr(board, PIN_NAME)
-except AttributeError as exc:
-    logger.critical("%s is not a valid pin name for this board.", PIN_NAME)
-    msg = f"{PIN_NAME} is not a valid pin name for this board."
-    raise ValueError(msg) from exc
-except Exception as e:  # Catch other board related errors, e.g. if Blinka is not setup
-    logger.critical(
-        "Failed to access board attribute for pin %s: %s", PIN_NAME, e, exc_info=True
-    )
-    msg = f"Board or pin initialization error for {PIN_NAME}"
-    raise RuntimeError(msg) from e
 
+# Initialize hardware pin (skip in dry run mode)
+if not DRY_RUN:
+    try:
+        pin = getattr(board, PIN_NAME)
+    except AttributeError as exc:
+        logger.critical("%s is not a valid pin name for this board.", PIN_NAME)
+        msg = f"{PIN_NAME} is not a valid pin name for this board."
+        raise ValueError(msg) from exc
+    except (
+        Exception
+    ) as e:  # Catch other board related errors, e.g. if Blinka is not setup
+        logger.critical(
+            "Failed to access board attribute for pin %s: %s",
+            PIN_NAME,
+            e,
+            exc_info=True,
+        )
+        msg = f"Board or pin initialization error for {PIN_NAME}"
+        raise RuntimeError(msg) from e
 
-try:
-    DIGITAL_PIN = digitalio.DigitalInOut(pin)
-    DIGITAL_PIN.switch_to_input()
-except Exception as e:
-    logger.critical("Failed to initialize digital pin %s: %s", PIN_NAME, e)
-    msg = f"Failed to initialize digital pin {PIN_NAME}"
-    raise RuntimeError(msg) from e
+    try:
+        DIGITAL_PIN = digitalio.DigitalInOut(pin)
+        DIGITAL_PIN.switch_to_input()
+    except Exception as e:
+        logger.critical("Failed to initialize digital pin %s: %s", PIN_NAME, e)
+        msg = f"Failed to initialize digital pin {PIN_NAME}"
+        raise RuntimeError(msg) from e
+else:
+    logger.info("DRY_RUN mode enabled - skipping hardware initialization")
+
+    # Create a mock pin object for dry run
+    class MockPin:
+        """Mock pin class for dry run mode."""
+
+        def __init__(self) -> None:
+            """Initialize mock pin with default state."""
+            self.value = False
+
+    DIGITAL_PIN = MockPin()
 
 # Determine primary and backup sources.
 BACKUP_SOURCE = str(config.get("BACKUP_INPUT", "B")).upper()  # Default to B if not set
@@ -1016,6 +1065,17 @@ def main() -> None:
     local_rabbitmq_publisher: RabbitMQPublisher | None = None
     local_rabbitmq_consumer: RabbitMQConsumer | None = None
     try:
+        if DRY_RUN:
+            logger.info("Starting WBOR Failsafe Notifier v1.4.0 in DRY_RUN mode...")
+            logger.info("Configuration validation successful")
+            logger.info(
+                "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
+                PRIMARY_SOURCE,
+                BACKUP_SOURCE,
+                PIN_NAME,
+            )
+            return
+
         logger.info("Starting WBOR Failsafe Notifier v1.4.0...")
         logger.info(
             "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
