@@ -1,39 +1,54 @@
+"""RabbitMQPublisher class for RabbitMQ message publishing.
+
+The class handles the connection to a RabbitMQ server, declares an exchange, and
+publishes messages to that exchange with retry logic and publisher confirms.
 """
-This module provides a RabbitMQPublisher class that handles the
-connection to a RabbitMQ server, declares an exchange, and publishes
-messages to that exchange with retry logic and publisher confirms.
-"""
+
+from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pika
-from pika.exceptions import AMQPChannelError, AMQPConnectionError, UnroutableError
+from pika.exceptions import (
+    AMQPChannelError,
+    AMQPConnectionError,
+    AMQPError,
+    UnroutableError,
+)
 
 
 class RabbitMQPublisher:
-    """
-    A RabbitMQ publisher class that handles connection, channel
-    management, exchange declaration, and message publishing with
-    retries and publisher confirms.
+    """RabbitMQ publisher class.
+
+    Handles connection, channel management, exchange declaration, and message publishing
+    with retries and publisher confirms.
     """
 
-    def __init__(self, amqp_url: str, exchange_name: str, exchange_type: str = "topic"):
+    def __init__(
+        self, amqp_url: str, exchange_name: str, exchange_type: str = "topic"
+    ) -> None:
+        """Initialize the RabbitMQ publisher.
+
+        Args:
+            amqp_url: AMQP connection URL
+            exchange_name: Name of the exchange to publish to
+            exchange_type: Type of exchange (default: topic)
+        """
         self.amqp_url = amqp_url
         self.exchange_name = exchange_name
         self.exchange_type = exchange_type
-        self._connection: Optional[pika.BlockingConnection] = None
-        self._channel: Optional[pika.channel.Channel] = None
+        self._connection: pika.BlockingConnection | None = None
+        self._channel: pika.channel.Channel | None = None
         self.logger = logging.getLogger(__name__ + ".RabbitMQPublisher")
         self._connect()
 
     def _connect(self) -> None:
-        """
-        Establish a connection to the RabbitMQ server and declare the
-        exchange. Called during initialization and whenever a connection
-        is needed.
+        """Establish a connection to the RabbitMQ server and declare the exchange.
+
+        Called during initialization and whenever a connection is needed.
         """
         if self._connection and self._connection.is_open:
             return
@@ -56,30 +71,27 @@ class RabbitMQPublisher:
             )
             self._channel.confirm_delivery()
             self.logger.info(
-                "Successfully connected to RabbitMQ and declared exchange `%s` (type: %s)",
+                "Successfully connected to RabbitMQ and declared exchange `%s` "
+                "(type: %s)",
                 self.exchange_name,
                 self.exchange_type,
             )
-        except AMQPConnectionError as e:
-            self.logger.error("Failed to connect to RabbitMQ: %s", e)
+        except AMQPConnectionError:
+            self.logger.exception("Failed to connect to RabbitMQ")
             self._connection = None
             self._channel = None
             raise
-        except (
-            Exception
-        ) as e:  # Catch other potential pika or general errors during setup
-            self.logger.error(
-                "An unexpected error occurred during RabbitMQ connection: %s", e
-            )
+        except AMQPError:  # Catch other AMQP-related errors during setup
+            self.logger.exception("An AMQP error occurred during RabbitMQ connection")
             self._connection = None
             self._channel = None
             raise
 
     def _ensure_connected(self) -> None:
-        """
-        Method to ensure the connection and channel are open. If not,
-        it attempts to reconnect. This is useful for checking the state
-        of the connection before publishing a message.
+        """Ensure the connection and channel are open.
+
+        If not, it attempts to reconnect. This is useful for checking the state of the
+        connection before publishing a message.
         """
         if (
             not self._connection
@@ -88,21 +100,21 @@ class RabbitMQPublisher:
             or self._channel.is_closed
         ):
             self.logger.warning(
-                "RabbitMQ connection/channel is closed or not established. Reconnecting..."
+                "RabbitMQ connection/channel is closed or not established. "
+                "Reconnecting..."
             )
             self._connect()
 
     def publish(
         self,
         routing_key: str,
-        message_body: Dict[str, Any],
+        message_body: dict[str, Any],
         retry_attempts: int = 3,
         retry_delay_seconds: int = 5,
     ) -> bool:
-        """
-        Publish a message to the RabbitMQ exchange with the specified
-        routing key. Uses exponential backoff for retrying on connection
-        or channel errors.
+        """Publish a message to the RabbitMQ exchange with the specified routing key.
+
+        Uses exponential backoff for retrying on connection or channel errors.
 
         Parameters:
         - routing_key (str): The routing key for the message.
@@ -117,9 +129,9 @@ class RabbitMQPublisher:
         """
         try:
             self._ensure_connected()
-        except Exception as e:  # pylint: disable=broad-except
-            self.logger.error(
-                "Failed to ensure RabbitMQ connection before publishing: %s", e
+        except (AMQPConnectionError, AMQPChannelError):
+            self.logger.exception(
+                "Failed to ensure RabbitMQ connection before publishing"
             )
             return False  # Cannot publish if connection cannot be ensured
 
@@ -129,57 +141,47 @@ class RabbitMQPublisher:
 
         try:
             message_body_str = json.dumps(message_body)
-        except TypeError as e:
-            self.logger.error(
-                "Failed to serialize message body to JSON: `%s`. Message: %s",
-                e,
+        except TypeError:
+            self.logger.exception(
+                "Failed to serialize message body to JSON. Message: %s",
                 message_body,
             )
             return False
 
         for attempt in range(retry_attempts):
             try:
-                # Pika's BlockingChannel.basic_publish with confirms enabled returns True on ACK,
-                # False/None on NACK/timeout However, behavior can be subtle. Checking for
-                # exceptions is more robust for BlockingConnection. If basic_publish itself raises
-                # an exception (e.g., channel closed), it's a clear failure. If mandatory=True and
-                # message is unroutable, UnroutableError is raised.
+                # Pika's BlockingChannel.basic_publish with confirms enabled returns
+                # True on ACK, False/None on NACK/timeout However, behavior can be
+                # subtle. Checking for exceptions is more robust for BlockingConnection.
+                # If basic_publish itself raises an exception (e.g., channel closed),
+                # it's a clear failure. If mandatory=True and message is unroutable,
+                # UnroutableError is raised.
 
                 self._channel.basic_publish(
                     exchange=self.exchange_name,
                     routing_key=routing_key,
                     body=message_body_str,
                     properties=pika.BasicProperties(
-                        delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,  # Make message persistent
+                        # Make message persistent
+                        delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE,
                         content_type="application/json",
                     ),
                     mandatory=True,  # Helps detect unroutable messages
                 )
-
-                # Assuming success if no exception is raised with confirm_delivery enabled
-                self.logger.info(
-                    "Successfully published message to exchange `%s` with routing key `%s` "
-                    "(attempt %d)",
-                    self.exchange_name,
-                    routing_key,
-                    attempt + 1,
-                )
-                return True
-
             except UnroutableError:
-                self.logger.error(
+                self.logger.exception(
                     "Message to exchange `%s` with routing key `%s` was unroutable. "
                     "Ensure a queue is bound correctly or the exchange exists.",
                     self.exchange_name,
                     routing_key,
                 )
-                return False  # Unroutable messages, don't retry without a configuration change
-            except (AMQPConnectionError, AMQPChannelError) as e:
-                self.logger.error(
-                    "Connection/Channel error during publish (attempt %d/%d): %s",
+                # Unroutable messages, don't retry without a configuration change
+                return False
+            except (AMQPConnectionError, AMQPChannelError):
+                self.logger.exception(
+                    "Connection/Channel error during publish (attempt %d/%d)",
                     attempt + 1,
                     retry_attempts,
-                    e,
                 )
                 if attempt < retry_attempts - 1:
                     self.logger.info(
@@ -189,39 +191,50 @@ class RabbitMQPublisher:
                         retry_delay_seconds * (attempt + 1)
                     )  # Basic exponential backoff
                     try:
-                        self._connect()  # Attempt to re-establish connection before next retry
-                    except Exception as recon_e:  # pylint: disable=broad-except
-                        self.logger.error(
-                            "Failed to reconnect during retry attempt: %s", recon_e
+                        # Attempt to re-establish connection before next retry
+                        self._connect()
+                    except (AMQPConnectionError, AMQPChannelError):
+                        self.logger.exception(
+                            "Failed to reconnect during retry attempt"
                         )
                         # Continue to next retry attempt if any, or fail
                 else:
-                    self.logger.error(
-                        "Failed to publish message after %d attempts due to connection/channel "
-                        "issues.",
+                    self.logger.exception(
+                        "Failed to publish message after %d attempts due to "
+                        "connection/channel issues.",
                         retry_attempts,
                     )
                     return False
-            except Exception as e:  # pylint: disable=broad-except
-                self.logger.error(
-                    "An unexpected error occurred during publish (attempt %d/%d): %s",
+            except Exception:
+                self.logger.exception(
+                    "An unexpected error occurred during publish (attempt %d/%d)",
                     attempt + 1,
                     retry_attempts,
-                    e,
                 )
-                self.logger.error(
-                    "Failed to publish message to exchange `%s` with routing key `%s` after %d "
-                    "attempts.",
+                self.logger.exception(
+                    "Failed to publish message to exchange `%s` with routing key "
+                    "`%s` after %d attempts.",
                     self.exchange_name,
                     routing_key,
                     retry_attempts,
                 )
                 # Fall through to retry or fail after attempts
+            else:
+                # Assuming success if no exception is raised with confirm_delivery
+                # enabled
+                self.logger.info(
+                    "Successfully published message to exchange `%s` with routing key"
+                    " `%s` (attempt %d)",
+                    self.exchange_name,
+                    routing_key,
+                    attempt + 1,
+                )
+                return True
 
             if attempt >= retry_attempts - 1:  # If loop finishes without returning True
                 self.logger.error(
-                    "Failed to publish message to exchange `%s` with routing key `%s` after %d "
-                    "attempts.",
+                    "Failed to publish message to exchange `%s` with routing key "
+                    "`%s` after %d attempts.",
                     self.exchange_name,
                     routing_key,
                     retry_attempts,
@@ -230,10 +243,10 @@ class RabbitMQPublisher:
         return False  # Should be unreachable if loop logic is correct
 
     def close(self) -> None:
-        """
-        Closes a RabbitMQ connection and channel if they are open. This
-        method should be called when the publisher is no longer needed
-        to ensure proper resource cleanup.
+        """Closes a RabbitMQ connection and channel if they are open.
+
+        This method should be called when the publisher is no longer needed to ensure
+        proper resource cleanup.
         """
         closed_something = False
         try:
@@ -241,15 +254,15 @@ class RabbitMQPublisher:
                 self._channel.close()
                 self.logger.info("RabbitMQ channel closed.")
                 closed_something = True
-        except Exception as e:  # pylint: disable=broad-except
-            self.logger.error("Error closing RabbitMQ channel: %s", e)
+        except Exception:  # Need to handle any exception during cleanup
+            self.logger.exception("Error closing RabbitMQ channel")
         try:
             if self._connection and self._connection.is_open:
                 self._connection.close()
                 self.logger.info("RabbitMQ connection closed.")
                 closed_something = True
-        except Exception as e:  # pylint: disable=broad-except
-            self.logger.error("Error closing RabbitMQ connection: %s", e)
+        except Exception:  # Need to handle any exception during cleanup
+            self.logger.exception("Error closing RabbitMQ connection")
 
         if not closed_something:
             self.logger.info(

@@ -61,7 +61,7 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
 5. Install the required packages:
 
     ```bash
-    pip install -r requirements.txt
+    uv sync
     ```
 
 6. Copy the sample `.env.sample` file to `.env`:
@@ -81,7 +81,7 @@ This script was built using **Python 3.13.2** (though it should be compatible wi
     * `DISCORD_WEBHOOK_URL` (Required if using Discord)
     * `GROUPME_BOT_ID_MGMT`, `GROUPME_BOT_ID_DJS`, `GROUPME_API_BASE_URL` (Required if using GroupMe)
     * Email settings (`SMTP_SERVER`, `SMTP_PORT`, etc.) if using email notifications.
-    * Optional settings like `AUTHOR_NAME`, `SPINITRON_API_BASE_URL`.
+    * Optional settings like `AUTHOR_NAME`, `SPINITRON_API_BASE_URL`, `TIMEZONE`.
 
     **RabbitMQ Integration (Optional)**
 
@@ -164,11 +164,153 @@ Then restart the service to apply the changes:
 sudo systemctl restart wbor-failsafe-notifier.service
 ```
 
+## Development
+
+### Prerequisites
+
+* Python 3.9 or higher
+* [uv](https://docs.astral.sh/uv/) package manager
+
+### Development Setup
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier.git
+   cd wbor-failsafe-notifier
+   ```
+
+2. **Install dependencies using uv (recommended):**
+
+   ```bash
+   uv sync --dev
+   ```
+
+   Or using traditional pip:
+
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -e .[dev]
+   ```
+
+3. **Set up environment configuration:**
+
+   ```bash
+   cp .env.sample .env
+   # Edit .env with your configuration
+   ```
+
+### Code Quality and Linting
+
+This project uses [Ruff](https://ruff.rs/) for linting and code formatting, and [mypy](https://mypy-lang.org/) for static type checking. The configuration follows modern Python standards with Google-style docstrings.
+
+#### Using Make targets
+
+```bash
+# Format code automatically
+make format
+
+# Run linting checks
+make lint
+
+# Run type checking
+make typecheck
+
+# Format code automatically with potentially unsafe fixes
+make lint-unsafe-fix
+
+# Run both formatting, linting, and type checking
+make check
+```
+
+### Running in Development
+
+```bash
+# Using uv
+BLINKA_FT232H=1 uv run python failsafe.py
+
+# Using traditional python
+BLINKA_FT232H=1 python failsafe.py
+```
+
+### Configuration
+
+The application supports the following configuration options in `.env`:
+
+#### Core Settings (Required)
+
+* `PIN_ASSIGNMENT`: GPIO pin name (e.g., "D18")
+
+* `BACKUP_INPUT`: Which input is backup ("A" or "B")
+
+#### Display Settings (Optional)
+
+* `TIMEZONE`: Timezone for log timestamps and playlist times (default: "America/New_York")
+  * Examples: "America/Los_Angeles", "Europe/London", "Asia/Tokyo"
+  * Uses standard IANA timezone names
+  * Invalid timezones will fall back to "America/New_York"
+  * **Note**: Defaults to New York timezone if not specified
+
+#### RabbitMQ Settings (Optional)
+
+* `RABBITMQ_AMQP_URL`: RabbitMQ connection URL
+
+* `RABBITMQ_EXCHANGE_NAME`: Exchange name (default: `'wbor_failsafe_events'`)
+* `RABBITMQ_ROUTING_KEY`: Routing key for notifications (default: `'notification.failsafe-status'`)
+* `RABBITMQ_OVERRIDE_QUEUE`: Queue for override commands (default: `'wbor_failsafe_override'`)
+* `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Health check routing key (default: `'health.failsafe-status'`)
+
+#### Temporary Override Feature
+
+Send messages to the override queue to temporarily disable failsafe processing:
+
+```json
+{
+  "action": "enable_override",
+  "duration_minutes": 5  # Optional, defaults to 5 minutes
+}
+```
+
+#### Health Check Messages
+
+The system sends hourly health check messages to RabbitMQ containing:
+
+* System status ("alive")
+* Current pin state
+* Active source
+* Override status
+
+### Project Structure
+
+```txt
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # CI/CD pipeline
+├── failsafe.py               # Main application
+├── utils/
+│   ├── logging.py            # Logging configuration
+│   ├── rabbitmq_publisher.py # RabbitMQ publishing
+│   └── rabbitmq_consumer.py  # RabbitMQ consuming
+├── pyproject.toml            # Project configuration
+├── Makefile                  # Development commands
+├── uv.lock                   # Dependency lock file
+└── requirements.txt          # Python dependencies (legacy)
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and ensure they pass linting: `make check`
+4. Commit your changes: `git commit -am 'Add feature'`
+5. Push to the branch: `git push origin feature-name`, following a conventional commit style (e.g., `feat: add new feature xyz`)
+6. Submit a pull request
+
 ## TODO
 
 Pull requests are welcome! Here are some ideas for future improvements:
 
-* [ ] Make timezone setting configurable for users outside of ET.
 * [ ] Allow for multiple pins to be monitored (e.g., for multiple Failsafe Gadgets).
 * [ ] Add support for other notification services (e.g., Slack, SMS).
 

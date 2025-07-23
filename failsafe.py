@@ -1,7 +1,6 @@
-"""
-Monitors a digital input on a microcontroller board and sends a Discord webhook
-notification when the input state changes. It distinguishes between primary and
-backup sources based on the configured pin state.
+"""Monitors input on a microcontroller board and sends a Discord webhook notification.
+
+This module distinguishes between primary and backup sources based on pin state.
 
 Author: Mason Daugherty <@mdrxy>
 Version: 1.4.0
@@ -21,36 +20,56 @@ Changelog:
         functionality and hourly health check messaging
 """
 
+from __future__ import annotations
+
 import copy
+from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
 import logging
 import smtplib
 import time
-from datetime import datetime, timezone, timedelta
-from email.mime.text import MIMEText
-from typing import Any, Dict, Optional
+from typing import Any
 
 import board
 import digitalio
+from dotenv import dotenv_values
 import pytz
 import requests
-from dotenv import dotenv_values
 
 from utils.logging import configure_logging
-from utils.rabbitmq_publisher import RabbitMQPublisher
 from utils.rabbitmq_consumer import RabbitMQConsumer
+from utils.rabbitmq_publisher import RabbitMQPublisher
 
-logging.root.handlers = []
-logger = configure_logging()
-
-# Load and validate required configurations
+# Load configuration first to get timezone
 config = dotenv_values(".env")
 if not config:
-    logger.warning(
-        ".env file is empty or not found. Attempting to use system environment variables."
-    )
     import os as _os
 
     config = dict(_os.environ)
+
+# Get timezone early for logger configuration
+TIMEZONE = config.get("TIMEZONE") or "America/New_York"
+
+# Initialize logging with configured timezone
+logging.root.handlers = []
+logger = configure_logging(timezone_name=TIMEZONE)
+
+# Validate timezone and create timezone object
+try:
+    configured_timezone = pytz.timezone(TIMEZONE)
+except pytz.UnknownTimeZoneError:
+    logger.exception(
+        "Invalid timezone '%s' specified. Using default 'America/New_York'", TIMEZONE
+    )
+    configured_timezone = pytz.timezone("America/New_York")
+    TIMEZONE = "America/New_York"
+
+# Log warning message if .env file wasn't found
+if not dotenv_values(".env"):
+    logger.warning(
+        ".env file is empty or not found. Attempting to use system environment "
+        "variables."
+    )
 
 
 required_configs = [
@@ -60,8 +79,8 @@ required_configs = [
 missing_configs = [key for key in required_configs if not config.get(key)]
 if missing_configs:
     CFG_ERR_MSG = (
-        f"Required configuration(s) `{'`, `'.join(missing_configs)}` must be set in .env file or "
-        "environment!"
+        f"Required configuration(s) `{'`, `'.join(missing_configs)}` must be set in "
+        ".env file or environment!"
     )
     logger.critical(CFG_ERR_MSG)
     raise ValueError(CFG_ERR_MSG)
@@ -69,17 +88,20 @@ if missing_configs:
 PIN_NAME = config.get("PIN_ASSIGNMENT")
 if PIN_NAME is None:
     logger.critical("PIN_ASSIGNMENT is not set in the configuration.")
-    raise ValueError("PIN_ASSIGNMENT must be set in the configuration.")
+    msg = "PIN_ASSIGNMENT must be set in the configuration."
+    raise ValueError(msg)
 try:
     pin = getattr(board, PIN_NAME)
 except AttributeError as exc:
     logger.critical("%s is not a valid pin name for this board.", PIN_NAME)
-    raise ValueError(f"{PIN_NAME} is not a valid pin name for this board.") from exc
+    msg = f"{PIN_NAME} is not a valid pin name for this board."
+    raise ValueError(msg) from exc
 except Exception as e:  # Catch other board related errors, e.g. if Blinka is not setup
     logger.critical(
         "Failed to access board attribute for pin %s: %s", PIN_NAME, e, exc_info=True
     )
-    raise RuntimeError(f"Board or pin initialization error for {PIN_NAME}") from e
+    msg = f"Board or pin initialization error for {PIN_NAME}"
+    raise RuntimeError(msg) from e
 
 
 try:
@@ -87,13 +109,15 @@ try:
     DIGITAL_PIN.switch_to_input()
 except Exception as e:
     logger.critical("Failed to initialize digital pin %s: %s", PIN_NAME, e)
-    raise RuntimeError(f"Failed to initialize digital pin {PIN_NAME}") from e
+    msg = f"Failed to initialize digital pin {PIN_NAME}"
+    raise RuntimeError(msg) from e
 
 # Determine primary and backup sources.
 BACKUP_SOURCE = str(config.get("BACKUP_INPUT", "B")).upper()  # Default to B if not set
 PRIMARY_SOURCE = "B" if BACKUP_SOURCE == "A" else "A"
 if BACKUP_SOURCE not in ["A", "B"]:  # Check after assignment
-    raise ValueError("`BACKUP_INPUT` must be either 'A' or 'B'.")
+    msg = "`BACKUP_INPUT` must be either 'A' or 'B'."
+    raise ValueError(msg)
 
 
 # Colors (in decimal)
@@ -140,18 +164,37 @@ RABBITMQ_ROUTING_KEY = config.get(
     "RABBITMQ_ROUTING_KEY",
     "notification.failsafe-status",
 )
-RABBITMQ_OVERRIDE_QUEUE = config.get("RABBITMQ_OVERRIDE_QUEUE") or "wbor_failsafe_override"
-RABBITMQ_HEALTHCHECK_ROUTING_KEY = config.get("RABBITMQ_HEALTHCHECK_ROUTING_KEY") or "health.failsafe-status"
+RABBITMQ_OVERRIDE_QUEUE = (
+    config.get("RABBITMQ_OVERRIDE_QUEUE") or "wbor_failsafe_override"
+)
+RABBITMQ_HEALTHCHECK_ROUTING_KEY = (
+    config.get("RABBITMQ_HEALTHCHECK_ROUTING_KEY") or "health.failsafe-status"
+)
 
-# Global state for temporary override functionality
-override_active = False
-override_end_time = None
-last_healthcheck_time = None
 
+class OverrideManager:
+    """Manages temporary override state for failsafe notifications.
 
-def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
+    Tracks whether failsafe notifications are temporarily disabled and when the override
+    period should end.
     """
-    Initializes and returns RabbitMQPublisher if configured.
+
+    def __init__(self) -> None:
+        """Initialize the override manager with default state."""
+        self.active = False
+        self.end_time: datetime | None = None
+        self.last_healthcheck_time: datetime | None = None
+
+
+# Global state manager for temporary override functionality
+override_manager = OverrideManager()
+
+
+def initialize_rabbitmq() -> RabbitMQPublisher | None:
+    """Initializes and returns RabbitMQPublisher if configured.
+
+    Returns:
+        RabbitMQPublisher instance if RABBITMQ_AMQP_URL is configured, None otherwise.
     """
     if RABBITMQ_AMQP_URL:
         try:
@@ -162,13 +205,12 @@ def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
                 "RabbitMQ publisher initialized for exchange `%s`.",
                 RABBITMQ_EXCHANGE_NAME,
             )
-            return publisher
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error(
-                "Failed to initialize RabbitMQ publisher: `%s`. Proceeding without RabbitMQ.",
-                e,
-                exc_info=True,
+        except Exception:
+            logger.exception(
+                "Failed to initialize RabbitMQ publisher. Proceeding without RabbitMQ."
             )
+        else:
+            return publisher
     else:
         logger.info(
             "RabbitMQ AMQP URL not configured. RabbitMQ publishing will be disabled."
@@ -176,9 +218,11 @@ def initialize_rabbitmq() -> Optional[RabbitMQPublisher]:
     return None
 
 
-def initialize_rabbitmq_consumer() -> Optional[RabbitMQConsumer]:
-    """
-    Initializes and returns RabbitMQConsumer if configured.
+def initialize_rabbitmq_consumer() -> RabbitMQConsumer | None:
+    """Initializes and returns RabbitMQConsumer if configured.
+
+    Returns:
+        RabbitMQConsumer instance if RABBITMQ_AMQP_URL is configured, None otherwise.
     """
     if RABBITMQ_AMQP_URL:
         try:
@@ -193,13 +237,13 @@ def initialize_rabbitmq_consumer() -> Optional[RabbitMQConsumer]:
                 "RabbitMQ consumer initialized for queue `%s`.",
                 RABBITMQ_OVERRIDE_QUEUE,
             )
-            return consumer
-        except Exception as e:
-            logger.error(
-                "Failed to initialize RabbitMQ consumer: `%s`. Proceeding without override functionality.",
-                e,
-                exc_info=True,
+        except Exception:
+            logger.exception(
+                "Failed to initialize RabbitMQ consumer. Proceeding without "
+                "override functionality."
             )
+        else:
+            return consumer
     else:
         logger.info(
             "RabbitMQ AMQP URL not configured. Override functionality will be disabled."
@@ -207,10 +251,9 @@ def initialize_rabbitmq_consumer() -> Optional[RabbitMQConsumer]:
     return None
 
 
-def handle_override_message(message: Dict[str, Any]) -> None:
-    """
-    Handle incoming override messages from RabbitMQ.
-    
+def handle_override_message(message: dict[str, Any]) -> None:
+    """Handle incoming override messages from RabbitMQ.
+
     Expected message format:
     ```
     {"action": "enable_override", "duration_minutes": 5}
@@ -218,62 +261,65 @@ def handle_override_message(message: Dict[str, Any]) -> None:
 
     If `duration_minutes` is not provided, defaults to 5 minutes.
     """
-    global override_active, override_end_time
-    
     try:
         action = message.get("action")
         if action == "enable_override":
             duration_minutes = message.get("duration_minutes", 5)
-            override_active = True
-            override_end_time = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
-            
+            override_manager.active = True
+            override_manager.end_time = datetime.now(timezone.utc) + timedelta(
+                minutes=duration_minutes
+            )
+
             logger.info(
                 "Temporary override activated for %d minutes (until %s UTC)",
                 duration_minutes,
-                override_end_time.isoformat(),
+                override_manager.end_time.isoformat(),
             )
-            
+
         elif action == "disable_override":
-            override_active = False
-            override_end_time = None
+            override_manager.active = False
+            override_manager.end_time = None
             logger.info("Temporary override manually disabled")
-            
+
         else:
-            logger.warning("Unknown override action received: %s", action) 
-            
-    except Exception as e:
-        logger.error("Error processing override message: %s", e, exc_info=True)
+            logger.warning("Unknown override action received: %s", action)
+
+    except Exception:
+        logger.exception("Error processing override message")
 
 
 def check_override_expiry() -> None:
+    """Check if the temporary override has expired and disable it if so.
+
+    Compares current time with override end time and resets override state if the period
+    has elapsed.
     """
-    Check if the temporary override has expired and disable it if so.
-    """
-    global override_active, override_end_time
-    
-    if override_active and override_end_time:
+    if override_manager.active and override_manager.end_time:
         current_time = datetime.now(timezone.utc)
-        if current_time >= override_end_time:
-            override_active = False
-            override_end_time = None
-            logger.info("Temporary override expired/disabled: returning to normal operation")
+        if current_time >= override_manager.end_time:
+            override_manager.active = False
+            override_manager.end_time = None
+            logger.info(
+                "Temporary override expired/disabled: returning to normal operation"
+            )
 
 
-def send_health_check(publisher: Optional[RabbitMQPublisher]) -> None:
+def send_health_check(publisher: RabbitMQPublisher | None) -> None:
+    """Send a health check message to RabbitMQ indicating the system is alive.
+
+    Publishes a heartbeat message with current system status including pin state, active
+    source, and override status.
     """
-    Send a health check message to RabbitMQ indicating the system is alive.
-    """
-    global last_healthcheck_time
-    
     if not publisher:
         return
-        
+
     current_time = datetime.now(timezone.utc)
-    
+
     # Send health check every hour
-    if (last_healthcheck_time is None or 
-        current_time - last_healthcheck_time >= timedelta(hours=1)):
-        
+    if (
+        override_manager.last_healthcheck_time is None
+        or current_time - override_manager.last_healthcheck_time >= timedelta(hours=1)
+    ):
         health_payload = {
             "source_application": "wbor-failsafe-notifier",
             "event_type": "health_check",
@@ -282,28 +328,27 @@ def send_health_check(publisher: Optional[RabbitMQPublisher]) -> None:
             "pin_name": PIN_NAME,
             "current_pin_state": DIGITAL_PIN.value,
             "active_source": PRIMARY_SOURCE if DIGITAL_PIN.value else BACKUP_SOURCE,
-            "override_active": override_active,
-            "override_end_time": override_end_time.isoformat() if override_end_time else None,
+            "override_active": override_manager.active,
+            "override_end_time": override_manager.end_time.isoformat()
+            if override_manager.end_time
+            else None,
         }
-        
+
         if publisher.publish(RABBITMQ_HEALTHCHECK_ROUTING_KEY, health_payload):
-            last_healthcheck_time = current_time
+            override_manager.last_healthcheck_time = current_time
             logger.info("Health check message sent successfully")
         else:
             logger.error("Failed to send health check message")
 
 
-def api_get(endpoint: str) -> Optional[dict]:
-    """
-    Make a GET request to the Spinitron API and return the JSON
-    response.
+def api_get(endpoint: str) -> dict | None:
+    """Make a GET request to the Spinitron API and return the JSON response.
 
-    Parameters:
-    - endpoint (str): The API endpoint to fetch.
+    Args:
+        endpoint: The API endpoint to fetch (without base URL).
 
     Returns:
-    - dict: The JSON response from the API, or None if an error
-        occurred.
+        The JSON response from the API, or None if an error occurred.
     """
     if not SPINITRON_API_BASE_URL:
         logger.warning(
@@ -314,24 +359,23 @@ def api_get(endpoint: str) -> Optional[dict]:
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        return response.json()
+        return response.json()  # type: ignore[no-any-return]
     except requests.exceptions.HTTPError as e:
-        logger.error(
+        logger.exception(
             "HTTP error fetching `%s`: Status %s, Response: %s",
             url,
             e.response.status_code,
             e.response.text,
         )
-    except requests.exceptions.RequestException as e:
-        logger.error("Request error fetching `%s`: `%s`", url, e)
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error("Unexpected error fetching `%s`: `%s`", url, e, exc_info=True)
+    except requests.exceptions.RequestException:
+        logger.exception("Request error fetching `%s`", url)
+    except Exception:
+        logger.exception("Unexpected error fetching `%s`", url)
     return None
 
 
 def send_email(subject: str, body: str, to_email: str) -> None:
-    """
-    Send an email using the configured SMTP server.
+    """Send an email using the configured SMTP server.
 
     Parameters:
     - subject (str): The subject of the email.
@@ -370,15 +414,15 @@ def send_email(subject: str, body: str, to_email: str) -> None:
             server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
         logger.info("Email successfully sent to `%s`", to_email)
     except smtplib.SMTPRecipientsRefused as e:
-        logger.error("SMTP recipients refused for `%s`: %s", to_email, e.recipients)
+        logger.exception("SMTP recipients refused for `%s`: %s", to_email, e.recipients)
         if ERROR_EMAIL and to_email != ERROR_EMAIL:  # Avoid self-notification loop
             send_email(
                 subject="Failsafe Gadget - SMTP Recipients Refused",
                 body=f"SMTP recipients refused for {to_email}: {e.recipients}",
                 to_email=ERROR_EMAIL,
             )
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error("Failed to send email to %s: %s", to_email, e, exc_info=True)
+    except Exception as e:
+        logger.exception("Failed to send email to %s", to_email)
         if ERROR_EMAIL and to_email != ERROR_EMAIL:
             send_email(
                 subject="Failsafe Gadget - Email Sending Failure",
@@ -387,9 +431,11 @@ def send_email(subject: str, body: str, to_email: str) -> None:
             )
 
 
-def get_current_playlist() -> Optional[dict]:
-    """
-    Get the current playlist from Spinitron API.
+def get_current_playlist() -> dict | None:
+    """Get the current playlist from Spinitron API.
+
+    Returns:
+        The current playlist data if available, None otherwise.
     """
     logger.debug("Fetching current playlist from Spinitron API")
     data = api_get("playlists?count=1")  # Fetch only the latest one
@@ -398,14 +444,13 @@ def get_current_playlist() -> Optional[dict]:
         if items:
             playlist = items[0]
             logger.debug("Current playlist: `%s`", playlist.get("title", "N/A"))
-            return playlist
+            return playlist  # type: ignore[no-any-return]
         logger.warning("No playlist items found in the response: %s", data)
     return None
 
 
-def get_show(show_id: int) -> Optional[dict]:
-    """
-    Get show information from Spinitron API.
+def get_show(show_id: int) -> dict | None:
+    """Get show information from Spinitron API.
 
     Parameters:
     - show_id (int): The ID of the show to fetch.
@@ -418,15 +463,17 @@ def get_show(show_id: int) -> Optional[dict]:
 
 
 def get_show_persona_ids(show: dict) -> list[int]:
-    """
-    Get persona IDs from a show object.
-    Extracts persona IDs from the `_links` field of the show object.
+    """Get persona IDs from a show object.
 
-    Parameters:
-    - show (dict): The show object containing persona links.
+    Extracts persona IDs from the `_links` field of the show object by parsing
+    the href URLs for each persona link.
+
+    Args:
+        show: The show object containing persona links in its _links field.
 
     Returns:
-    - list[int]: A list of persona IDs extracted from the show object.
+        A list of persona IDs extracted from the show object. Returns empty
+        list if no persona links are found or if parsing fails.
     """
     try:
         personas_links = show.get("_links", {}).get("personas", [])
@@ -442,32 +489,32 @@ def get_show_persona_ids(show: dict) -> list[int]:
                     logger.warning(
                         "Could not parse persona ID from href: `%s`", p_link["href"]
                     )
+    except Exception:
+        logger.exception("Error parsing persona IDs from show")
+        return []
+    else:
         return ids
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error("Error parsing persona IDs from show: `%s`", e, exc_info=True)
-    return []
 
 
-def get_persona(persona_id: int) -> Optional[dict]:
-    """
-    Get persona information from Spinitron API.
+def get_persona(persona_id: int) -> dict | None:
+    """Get persona information from Spinitron API.
 
-    Parameters:
-    - persona_id (int): The ID of the persona to fetch.
+    Args:
+        persona_id: The ID of the persona to fetch.
 
     Returns:
-    - dict: The persona information, or None if an error occurred.
+        The persona information, or None if an error occurred.
     """
     logger.debug("Fetching persona with ID `%s`", persona_id)
     return api_get(f"personas/{persona_id}")
 
 
-def send_discord_notification(payload: Dict[str, Any]) -> None:
-    """
-    Sends a pre-formatted Discord notification using a webhook.
+def send_discord_notification(payload: dict[str, Any]) -> None:
+    """Sends a pre-formatted Discord notification using a webhook.
 
-    Parameters:
-    - payload (dict): The payload to send to the Discord webhook.
+    Args:
+        payload: The payload to send to the Discord webhook. Should contain
+            embeds with notification details.
     """
     if not DISCORD_WEBHOOK_URL:
         logger.warning(
@@ -476,7 +523,7 @@ def send_discord_notification(payload: Dict[str, Any]) -> None:
         return
 
     # Ensure timestamp is always present and in UTC
-    if "embeds" in payload and payload["embeds"]:
+    if payload.get("embeds"):
         payload["embeds"][0]["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -484,33 +531,30 @@ def send_discord_notification(payload: Dict[str, Any]) -> None:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         response.raise_for_status()
         logger.debug("Discord notification sent successfully.")
-    except requests.exceptions.RequestException as e:
-        logger.error("Error sending Discord webhook: %s", e)
-    except Exception as e:  # pylint: disable=broad-except
-        logger.error(
-            "Unexpected error sending Discord notification: %s", e, exc_info=True
-        )
+    except requests.exceptions.RequestException:
+        logger.exception("Error sending Discord webhook")
+    except Exception:
+        logger.exception("Unexpected error sending Discord notification")
 
 
 def send_discord_source_change(
     current_source: str,
-    playlist_info: Optional[Dict[str, Any]],
-    persona_info: Optional[Dict[str, Any]],
+    playlist_info: dict[str, Any] | None,
+    persona_info: dict[str, Any] | None,
 ) -> None:
-    """
-    Sends Discord notification about source change.
+    """Sends Discord notification about source change.
 
     Parameters:
     - current_source (str): The current source (A or B).
     - playlist_info (dict): Information about the current playlist.
     - persona_info (dict): Information about the DJ.
     """
-    payload: Dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
+    payload: dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
     embed = payload["embeds"][0]
 
     fields = []
     thumb_url = None
-    eastern_tz = pytz.timezone("America/New_York")
+    user_tz = configured_timezone
 
     if playlist_info:
         thumb_url = playlist_info.get("image")
@@ -520,26 +564,25 @@ def send_discord_source_change(
                 # Spinitron 'start' and 'end' are typically ISO 8601 UTC strings
                 utc_dt = datetime.fromisoformat(playlist_info["start"])
 
-                # If fromisoformat results in a naive datetime (no tzinfo), assume it's UTC
+                # If fromisoformat results in a naive datetime (no tzinfo), assume UTC
                 if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
                     utc_dt = utc_dt.replace(tzinfo=timezone.utc)  # Make it UTC aware
 
-                eastern_dt = utc_dt.astimezone(eastern_tz)  # Convert to Eastern Time
-                start_time_str = eastern_dt.strftime(
+                local_dt = utc_dt.astimezone(user_tz)  # Convert to configured timezone
+                start_time_str = local_dt.strftime(
                     "%Y-%m-%d %I:%M %p %Z"
-                )  # %Z will add EST/EDT
+                )  # %Z will add timezone abbreviation
             except ValueError as e:
                 logger.warning(
                     "Could not parse start time from Spinitron: %s - %s",
                     playlist_info["start"],
                     e,
                 )
-            except Exception as e:  # pylint: disable=broad-except
-                logger.error(
-                    "Error converting start time %s to Eastern: %s",
+            except Exception:
+                logger.exception(
+                    "Error converting start time %s to %s",
                     playlist_info["start"],
-                    e,
-                    exc_info=True,
+                    TIMEZONE,
                 )
 
         end_time_str = "N/A"
@@ -550,30 +593,29 @@ def send_discord_source_change(
                 if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
                     utc_dt = utc_dt.replace(tzinfo=timezone.utc)
 
-                eastern_dt = utc_dt.astimezone(eastern_tz)
-                end_time_str = eastern_dt.strftime(
+                local_dt = utc_dt.astimezone(user_tz)
+                end_time_str = local_dt.strftime(
                     "%Y-%m-%d %I:%M %p %Z"
-                )  # %Z will add EST/EDT
+                )  # %Z will add timezone abbreviation
             except ValueError as e:
                 logger.warning(
                     "Could not parse end time from Spinitron: %s - %s",
                     playlist_info["end"],
                     e,
                 )
-            except Exception as e:  # pylint: disable=broad-except
-                logger.error(
-                    "Error converting end time %s to Eastern: %s",
+            except Exception:
+                logger.exception(
+                    "Error converting end time %s to %s",
                     playlist_info["end"],
-                    e,
-                    exc_info=True,
+                    TIMEZONE,
                 )
         fields.append(
             {
                 "name": "Playlist",
                 # Value is a link to the playlist on Spinitron
                 "value": (
-                    f"[{playlist_info.get('title', 'N/A')}]({SPINITRON_API_BASE_URL}/playlists/"
-                    f"{playlist_info['id']})"
+                    f"[{playlist_info.get('title', 'N/A')}]("
+                    f"{SPINITRON_API_BASE_URL}/playlists/{playlist_info['id']})"
                     if SPINITRON_API_BASE_URL and playlist_info.get("id")
                     else playlist_info.get("title", "N/A")
                 ),
@@ -624,19 +666,18 @@ def send_discord_source_change(
 def send_discord_email_alert(
     dj_name: str,
     dj_email: str,
-    playlist_title: Optional[str],
-    playlist_url: Optional[str],
+    playlist_title: str | None,
+    playlist_url: str | None,
 ) -> None:
-    """
-    Sends a Discord notification about the email sent to the DJ.
+    """Sends a Discord notification about the email sent to the DJ.
 
     Parameters:
     - dj_name (str): The name of the DJ.
     - dj_email (str): The email address of the DJ.
     - playlist_title (str): The title of the playlist.
     """
-    payload: Dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
-    embed: Dict[str, Any] = payload["embeds"][0]
+    payload: dict[str, Any] = copy.deepcopy(DISCORD_EMBED_PAYLOAD_BASE)
+    embed: dict[str, Any] = payload["embeds"][0]
     embed["title"] = "Failsafe Gadget - DJ Email Notification Sent"
     embed["color"] = DISCORD_EMBED_WARNING_COLOR
     embed["description"] = (
@@ -655,10 +696,9 @@ def send_discord_email_alert(
 
 
 def resolve_and_notify_dj(
-    playlist: Dict[str, Any], current_source: str
-) -> Optional[Dict[str, Any]]:
-    """
-    Resolves the DJ's email and sends notifications if necessary.
+    playlist: dict[str, Any], current_source: str
+) -> dict[str, Any] | None:
+    """Resolves the DJ's email and sends notifications if necessary.
 
     Parameters:
     - playlist (dict): The current playlist data (unmodified from
@@ -675,8 +715,8 @@ def resolve_and_notify_dj(
         return None
 
     persona_id = playlist.get("persona_id")
-    primary_persona_data: Optional[Dict[str, Any]] = None
-    dj_email_to_notify: Optional[str] = None
+    primary_persona_data: dict[str, Any] | None = None
+    dj_email_to_notify: str | None = None
     dj_name_to_notify: str = "Unknown DJ"
 
     if persona_id:
@@ -696,8 +736,8 @@ def resolve_and_notify_dj(
                 alt_persona = get_persona(alt_id)
                 if alt_persona and alt_persona.get("email"):
                     dj_email_to_notify = alt_persona["email"]
-                    # Prefer name of persona with email if primary name was "Unknown" or primary had
-                    # no email
+                    # Prefer name of persona with email if primary name was "Unknown"
+                    # or primary had no email
                     if dj_name_to_notify == "Unknown DJ" or not (
                         primary_persona_data and primary_persona_data.get("email")
                     ):
@@ -732,23 +772,27 @@ def resolve_and_notify_dj(
                 dj_email_to_notify,
             )
             email_body = (
-                f"Hey {dj_name_to_notify}!\n\nThis is an automated message from WBOR's Failsafe "
-                "Gadget.\n\nIt appears the station has switched to the backup audio source during "
-                f"your show '{playlist.get('title', 'N/A')}'. This usually means there's an issue "
-                "with the audio from the audio console (e.g., dead air, incorrect input selected, "
-                "or equipment malfunction).\n\n Please check the following:\n"
+                f"Hey {dj_name_to_notify}!\n\nThis is an automated message from WBOR's "
+                "Failsafe Gadget.\n\nIt appears the station has switched to the backup "
+                f"audio source during your show '{playlist.get('title', 'N/A')}'. This "
+                "usually means there's an issue with the audio from the audio console "
+                "(e.g., dead air, incorrect input selected, or equipment malfunction). "
+                "\n\n Please check the following:\n"
                 "1. Is your microphone on and audible?\n"
                 "2. Is your music/audio source playing correctly through the board?\n"
-                "3. Are the correct channels selected and faders up on the mixing console?\n\n"
-                "If you cannot resolve the issue, please ensure the station is broadcasting "
-                "something (e.g., put automation on if available and working, or a long, clean "
-                "music track) and contact station management immediately for assistance.\n\n"
-                "Do not reply to this email as it is unattended. Contact management via "
-                "wbor@bowdoin.edu or other channels.\n\nThanks for your help!\n-mgmt\n\n"
+                "3. Are the correct channels selected and faders up on the console?\n\n"
+                "If you cannot resolve the issue, please ensure the station is "
+                "broadcasting something (e.g., put automation on if available and "
+                "working, or a long, clean music track) and contact station management "
+                "immediately for assistance.\n\n"
+                "Do not reply to this email as it is unattended. Contact management at "
+                "wbor@bowdoin.edu or other channels.\n\nThanks for your help!"
+                "\n-mgmt\n\n"
                 "Automated message sent by WBOR-91-1-FM/wbor-failsafe-notifier"
             )
             send_email(
-                subject="ATTN: WBOR Failsafe Activated - Action Required During Your Show",
+                subject="ATTN: WBOR Failsafe Activated - Action Required During "
+                "Your Show",
                 body=email_body,
                 to_email=dj_email_to_notify,
             )
@@ -767,7 +811,8 @@ def resolve_and_notify_dj(
             persona_info_for_event["email_notified"] = dj_email_to_notify
         else:
             logger.warning(
-                "No email address found for DJ(s) of show `%s`. Sending alert to public GroupMe.",
+                "No email address found for DJ(s) of show `%s`. Sending alert to "
+                "public GroupMe.",
                 playlist.get("title", "N/A"),
             )
             if GROUPME_BOT_ID_DJS:
@@ -782,10 +827,9 @@ def resolve_and_notify_dj(
 
 
 def send_groupme_notification(
-    current_source: str, bot_id: Optional[str], is_public_dj_alert: bool = False
+    current_source: str, bot_id: str | None, *, is_public_dj_alert: bool = False
 ) -> None:
-    """
-    Sends a message to a GroupMe group.
+    """Sends a message to a GroupMe group.
 
     Parameters:
     - current_source (str): The current source (A or B).
@@ -794,7 +838,7 @@ def send_groupme_notification(
     """
     if not bot_id:
         logger.debug(
-            "GroupMe Bot ID not configured for this alert type. Skipping GroupMe notification."
+            "GroupMe Bot ID not configured for this alert type. Skipping notification."
         )
         return
     if not GROUPME_API_BASE_URL:
@@ -807,21 +851,24 @@ def send_groupme_notification(
     if current_source == BACKUP_SOURCE:
         if is_public_dj_alert:
             text_message = (
-                "⚠️ WARNING ⚠️\n\nWBOR may be experiencing dead air (more than 60 seconds of "
-                "silence). The studio audio console has automatically switched to the backup audio "
-                "source. If you are the current DJ, please check your broadcast. Ensure your "
-                "microphone is on, music is playing, and levels are appropriate. If issues "
-                "persist, contact station management. Please do not leave the station "
-                "until management is contacted."
+                "⚠️ WARNING ⚠️\n\nWBOR may be experiencing dead air (more than 60 "
+                "seconds of silence). The studio audio console has automatically "
+                "switched to the backup audio source. If you are the current DJ, "
+                "please check your broadcast. Ensure your microphone is on, music is "
+                "playing, and levels are appropriate. If issues persist, contact "
+                "station management. Please do not leave the station until management "
+                "is contacted."
             )
         else:  # Management alert
             text_message = (
-                f"⚠️ FAILSAFE ACTIVATED ⚠️\nWBOR has switched to backup source `{current_source}`. "
+                f"⚠️ FAILSAFE ACTIVATED ⚠️\nWBOR has switched to backup source "
+                f"`{current_source}`. "
                 "Primary source may have failed. Investigate this!"
             )
     else:  # Switched back to primary
         text_message = (
-            f"✅ FAILSAFE RESOLVED ✅\nWBOR has switched back to primary source `{current_source}`. "
+            f"✅ FAILSAFE RESOLVED ✅\nWBOR has switched back to primary source "
+            f"`{current_source}`. "
             "System normal."
         )
     payload = {"bot_id": bot_id, "text": text_message}
@@ -835,21 +882,25 @@ def send_groupme_notification(
         )
         response.raise_for_status()
         logger.debug("GroupMe message sent successfully.")
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            "Error sending GroupMe message to bot ID `%s`...: %s",
+    except requests.exceptions.RequestException:
+        logger.exception(
+            "Error sending GroupMe message to bot ID `%s`...",
             bot_id[:5] if bot_id else "N/A",
-            e,
         )
-        logger.error("Unexpected error sending GroupMe message: %s", e, exc_info=True)
 
 
 def main_loop(
-    local_rabbitmq_publisher: Optional[RabbitMQPublisher],
-    local_rabbitmq_consumer: Optional[RabbitMQConsumer],
-):
-    """
-    Monitor digital pin and send webhook on state change.
+    local_rabbitmq_publisher: RabbitMQPublisher | None,
+    local_rabbitmq_consumer: RabbitMQConsumer | None,
+) -> None:
+    """Monitor digital pin and send webhook on state change.
+
+    Main monitoring loop that continuously checks the digital pin state and triggers
+    notifications when failsafe source switching occurs.
+
+    Args:
+        local_rabbitmq_publisher: RabbitMQ publisher for sending notifications.
+        local_rabbitmq_consumer: RabbitMQ consumer for receiving override commands.
     """
     prev_pin_state = DIGITAL_PIN.value
     prev_source = PRIMARY_SOURCE if prev_pin_state else BACKUP_SOURCE
@@ -872,15 +923,15 @@ def main_loop(
         try:
             # Check for override expiry
             check_override_expiry()
-            
+
             # Send health check if needed
             send_health_check(local_rabbitmq_publisher)
-            
+
             current_pin_state = DIGITAL_PIN.value
             current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
 
             # Check if we should skip processing due to active override
-            if override_active:
+            if override_manager.active:
                 logger.debug("Override is active, skipping state change processing")
                 prev_pin_state = current_pin_state
                 prev_source = current_source
@@ -896,8 +947,8 @@ def main_loop(
                     current_pin_state,
                 )
 
-                playlist_data: Optional[Dict[str, Any]] = None
-                persona_data: Optional[Dict[str, Any]] = None
+                playlist_data: dict[str, Any] | None = None
+                persona_data: dict[str, Any] | None = None
 
                 # Only fetch Spinitron if configured
                 if SPINITRON_API_BASE_URL:
@@ -934,7 +985,8 @@ def main_loop(
                         },
                     }
                     logger.info(
-                        "Publishing source change event to RabbitMQ with routing key `%s`.",
+                        "Publishing source change event to RabbitMQ with routing key "
+                        "`%s`.",
                         RABBITMQ_ROUTING_KEY,
                     )
                     routing_key = RABBITMQ_ROUTING_KEY or "notification.failsafe-status"
@@ -950,17 +1002,19 @@ def main_loop(
 
             time.sleep(0.5)  # Check interval for pin state
 
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error("Error in main monitoring loop: %s", e, exc_info=True)
+        except Exception:
+            logger.exception("Error in main monitoring loop")
             time.sleep(10)
 
 
-def main():
+def main() -> None:
+    """Primary entry point for the WBOR Failsafe Notifier.
+
+    Initializes RabbitMQ connections, sets up signal handlers for graceful shutdown, and
+    starts the main monitoring loop. Handles cleanup on exit.
     """
-    Primary entry point for the WBOR Failsafe Notifier.
-    """
-    local_rabbitmq_publisher: Optional[RabbitMQPublisher] = None
-    local_rabbitmq_consumer: Optional[RabbitMQConsumer] = None
+    local_rabbitmq_publisher: RabbitMQPublisher | None = None
+    local_rabbitmq_consumer: RabbitMQConsumer | None = None
     try:
         logger.info("Starting WBOR Failsafe Notifier v1.4.0...")
         logger.info(
@@ -980,7 +1034,7 @@ def main():
         logger.critical("Runtime initialization error: %s. Exiting.", e)
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received. Shutting down...")
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:
         logger.critical("An unexpected critical error occurred: %s", e, exc_info=True)
     finally:
         logger.info("WBOR Failsafe Notifier shutting down.")
