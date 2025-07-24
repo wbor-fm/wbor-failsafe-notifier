@@ -219,7 +219,7 @@ To temporarily disable failsafe processing, you can send override messages to th
 ```bash
 # Enable 5-minute override
 curl -u username:password -H "Content-Type: application/json" \
-     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/commands/publish \
+     -X POST http://example.com:15672/api/exchanges/%2F/commands/publish \
      -d '{
        "properties": {},
        "routing_key": "command.failsafe-override",
@@ -229,7 +229,7 @@ curl -u username:password -H "Content-Type: application/json" \
 
 # Disable override (reverts to normal operation)
 curl -u username:password -H "Content-Type: application/json" \
-     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/commands/publish \
+     -X POST http://example.com:15672/api/exchanges/%2F/commands/publish \
      -d '{
        "properties": {},
        "routing_key": "command.failsafe-override",
@@ -238,7 +238,7 @@ curl -u username:password -H "Content-Type: application/json" \
      }'
 ```
 
-Replace `username:password` and `rabbitmq.example.com` with your RabbitMQ credentials and hostname.
+Replace `username:password` and `rabbitmq.example.com` with your RabbitMQ credentials and hostname. Be sure to use the correct protocol (HTTP or HTTPS) and port (default is 15672 for RabbitMQ management).
 
 ### Project Structure
 

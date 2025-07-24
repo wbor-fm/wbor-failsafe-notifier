@@ -1,3 +1,5 @@
+# type ignores since VSCode struggles to see pika types correctly
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -40,7 +42,7 @@ class HealthCheckMonitor:
 
         self.last_health_check: datetime | None = None
         self.connection: pika.BlockingConnection | None = None
-        self.channel: pika.channel.Channel | None = None
+        self.channel: pika.channel.Channel | None = None  # type: ignore[attr-defined]
         self.is_running = True
 
         if not self.discord_webhook_url:
@@ -57,15 +59,15 @@ class HealthCheckMonitor:
             self.channel = self.connection.channel()
 
             # Declare the exchange
-            self.channel.exchange_declare(
+            self.channel.exchange_declare(  # type: ignore[attr-defined]
                 exchange=self.exchange_name, exchange_type="topic", durable=True
             )
 
             # Declare the queue
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
+            self.channel.queue_declare(queue=self.queue_name, durable=True)  # type: ignore[attr-defined]
 
             # Bind the queue to the exchange with the routing key
-            self.channel.queue_bind(
+            self.channel.queue_bind(  # type: ignore[attr-defined]
                 exchange=self.exchange_name,
                 queue=self.queue_name,
                 routing_key=self.routing_key,
@@ -98,9 +100,9 @@ class HealthCheckMonitor:
 
     def process_health_check(
         self,
-        ch: pika.channel.Channel,
-        method: pika.spec.Basic.Deliver,
-        _properties: pika.spec.BasicProperties,
+        ch: pika.channel.Channel,  # type: ignore[attr-defined]
+        method: pika.spec.Basic.Deliver,  # type: ignore[attr-defined]
+        _properties: pika.spec.BasicProperties,  # type: ignore[attr-defined]
         body: bytes,
     ) -> None:
         """Process incoming health check messages from RabbitMQ."""
@@ -134,9 +136,11 @@ class HealthCheckMonitor:
                 last_check_str = self.last_health_check.strftime("%Y-%m-%d %H:%M:%S")
                 alert_message = (
                     "🚨 **Health Check Alert** 🚨\n"
-                    f"No health check received for {seconds_since} seconds\n"
-                    f"Last health check: {last_check_str}\n"
-                    f"Threshold: {self.timeout_threshold} seconds"
+                    f"No health check received from `failsafe.py` for {seconds_since} "
+                    "seconds\n"
+                    f"Last health check: `{last_check_str}`\n"
+                    f"Threshold: `{self.timeout_threshold}` seconds\n\n"
+                    "Please investigate that the failsafe device is powered on."
                 )
                 logger.warning(
                     "Health check timeout detected: %s seconds",
