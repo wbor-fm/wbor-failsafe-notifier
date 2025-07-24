@@ -21,7 +21,10 @@ The script is written to suit **our needs**, but you can easily modify it to sui
 * Simultaneously, we send a message to the GroupMe group with the same information to the management-wide GroupMe group (that includes non-technical staff members).
 * If an email address was found, we send the DJ an email letting them know that the backup source is active and they should check board's status. This is done using the [smtplib](https://docs.python.org/3/library/smtplib.html) library in Python. The email is sent from the address specified in the `.env` file.
   * Any time an email is sent, we notify the tech-ops channel in Discord letting them know that an email was sent to the DJ.
-* **Optionally**, all source change events can be published to a RabbitMQ message queue for consumption by other services (e.g., centralized logging, further analytics, or custom alerting systems).
+* **Optionally**, events can be published to RabbitMQ message queues using three separate exchanges:
+  * **notifications** - source change events for other consumers to monitor operational status
+  * **healthcheck** - periodic health pings for monitoring service availability  
+  * **commands** - override commands to temporarily disable failsafe processing
 
 ## Installation & Setup
 
@@ -85,7 +88,7 @@ Edit `.env` to configure your setup. Key sections:
 * `DISCORD_WEBHOOK_URL` - Discord webhook for alerts
 * `GROUPME_BOT_ID_MGMT`, `GROUPME_BOT_ID_DJS` - GroupMe bot IDs
 * Email settings (`SMTP_SERVER`, `SMTP_USERNAME`, etc.)
-* RabbitMQ settings for message queue integration
+* RabbitMQ settings for three-exchange message queue integration
 
 **Optional Settings:**
 
@@ -204,8 +207,8 @@ All configuration is handled through the `.env` file. See `.env.sample` for comp
 
 * **Core settings** - GPIO pin assignment and backup input configuration
 * **Notification services** - Discord, GroupMe, and email setup
-* **Optional features** - Timezone, Spinitron API, RabbitMQ integration
-* **Advanced RabbitMQ** - Override commands and health check messaging
+* **Optional features** - Timezone, Spinitron API, RabbitMQ three-exchange integration
+* **Advanced RabbitMQ** - Three exchanges (notifications, healthcheck, commands), override commands, and health check messaging
 
 Copy `.env.sample` to `.env` (shortcut: `make env-copy`) and customize for your setup.
 
@@ -216,20 +219,20 @@ To temporarily disable failsafe processing, you can send override messages to th
 ```bash
 # Enable 5-minute override
 curl -u username:password -H "Content-Type: application/json" \
-     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/wbor_failsafe_events/publish \
+     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/commands/publish \
      -d '{
        "properties": {},
-       "routing_key": "wbor_failsafe_override",
+       "routing_key": "command.failsafe-override",
        "payload": "{\"action\": \"enable_override\", \"duration_minutes\": 5}",
        "payload_encoding": "string"
      }'
 
 # Disable override (reverts to normal operation)
 curl -u username:password -H "Content-Type: application/json" \
-     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/wbor_failsafe_events/publish \
+     -X POST http://rabbitmq.example.com:15672/api/exchanges/%2F/commands/publish \
      -d '{
        "properties": {},
-       "routing_key": "wbor_failsafe_override",
+       "routing_key": "command.failsafe-override",
        "payload": "{\"action\": \"disable_override\"}",
        "payload_encoding": "string"
      }'
@@ -244,6 +247,7 @@ Replace `username:password` and `rabbitmq.example.com` with your RabbitMQ creden
 │   └── workflows/
 │       └── ci.yml            # CI/CD pipeline
 ├── failsafe.py               # Main application
+├── config.py                 # Configuration management
 ├── utils/
 │   ├── logging.py            # Logging configuration
 │   ├── rabbitmq_publisher.py # RabbitMQ publishing
