@@ -59,6 +59,10 @@ The script is written to suit **our needs**, but you can easily modify it to sui
    ```bash
    cp .env.sample .env
    nano .env  # Edit configuration (see Configuration section below)
+
+   # or using Makefile
+   make env-copy
+   nano .env
    ```
 
 4. **Test the setup:**

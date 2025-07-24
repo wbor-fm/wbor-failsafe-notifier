@@ -69,8 +69,8 @@ service-logs: ## View systemd service logs
 
 # Environment setup
 env-copy: ## Copy .env.example to .env
-	cp .env.example .env
-	@echo "Copied .env.example to .env - please edit with your configuration"
+	cp .env.sample .env
+	@echo "Copied .env.sample to .env - please edit with your configuration"
 
 # Quick development workflow
 dev-setup: install env-copy ## Complete development setup
