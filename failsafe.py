@@ -1,23 +1,6 @@
 """Monitors input on a microcontroller board and sends a Discord webhook notification.
 
 This module distinguishes between primary and backup sources based on pin state.
-
-Author: Mason Daugherty <@mdrxy>
-Version: 1.4.0
-Last Modified: 2025-07-23
-
-Changelog:
-    - 1.0.0 (2025-03-22): Initial release.
-    - 1.2.0 (2025-05-06): Many fixes and small enhancements
-    - 1.3.0 (2025-05-10): Added RabbitMQ publishing for notifications
-        and refactored code for better readability and maintainability.
-    - 1.3.1 (2025-05-10): Refactored to remove global statement for
-        RabbitMQ publisher.
-    - 1.3.2 (2025-05-10): Timezone and wording fixes
-    - 1.3.3 (2025-05-16): Link the playlist in the email notification
-        embed
-    - 1.4.0 (2025-07-23): Added RabbitMQ consumer for temporary override
-        functionality and hourly health check messaging
 """
 
 from __future__ import annotations
@@ -31,22 +14,23 @@ import time
 from typing import Any
 
 from dotenv import dotenv_values
-import pytz
 import requests
 
+from config import (
+    DISCORD_EMBED_ERROR_COLOR,
+    DISCORD_EMBED_SUCCESS_COLOR,
+    DISCORD_EMBED_WARNING_COLOR,
+    load_config,
+)
 from utils.logging import configure_logging
 from utils.rabbitmq_consumer import RabbitMQConsumer
 from utils.rabbitmq_publisher import RabbitMQPublisher
 
-# Load configuration first to check for dry run mode
-config = dotenv_values(".env")
-if not config:
-    import os as _os
-
-    config = dict(_os.environ)
+# Load configuration
+app_config = load_config()
 
 # Hardware imports - skip in dry run mode to avoid hardware dependencies
-if (config.get("DRY_RUN") or "").lower() not in ("true", "1", "yes"):
+if not app_config.dry_run:
     import board
     import digitalio
 else:
@@ -74,25 +58,9 @@ else:
     board = MockBoard()
     digitalio = MockDigitalIO()
 
-# Get timezone early for logger configuration
-TIMEZONE = config.get("TIMEZONE") or "America/New_York"
-
-# Check for dry run mode (used in CI/testing)
-DRY_RUN = (config.get("DRY_RUN") or "").lower() in ("true", "1", "yes")
-
 # Initialize logging with configured timezone
 logging.root.handlers = []
-logger = configure_logging(timezone_name=TIMEZONE)
-
-# Validate timezone and create timezone object
-try:
-    configured_timezone = pytz.timezone(TIMEZONE)
-except pytz.UnknownTimeZoneError:
-    logger.exception(
-        "Invalid timezone '%s' specified. Using default 'America/New_York'", TIMEZONE
-    )
-    configured_timezone = pytz.timezone("America/New_York")
-    TIMEZONE = "America/New_York"
+logger = configure_logging(timezone_name=app_config.timezone)
 
 # Log warning message if .env file wasn't found
 if not dotenv_values(".env"):
@@ -102,24 +70,11 @@ if not dotenv_values(".env"):
     )
 
 
-required_configs = [
-    "PIN_ASSIGNMENT",
-    "BACKUP_INPUT",
-]
-missing_configs = [key for key in required_configs if not config.get(key)]
-if missing_configs:
-    CFG_ERR_MSG = (
-        f"Required configuration(s) `{'`, `'.join(missing_configs)}` must be set in "
-        ".env file or environment!"
-    )
-    logger.critical(CFG_ERR_MSG)
-    raise ValueError(CFG_ERR_MSG)
-
-PIN_NAME = config.get("PIN_ASSIGNMENT")
-if PIN_NAME is None:
-    logger.critical("PIN_ASSIGNMENT is not set in the configuration.")
-    msg = "PIN_ASSIGNMENT must be set in the configuration."
-    raise ValueError(msg)
+PIN_NAME = app_config.pin_assignment
+PRIMARY_SOURCE = app_config.primary_source
+BACKUP_SOURCE = app_config.backup_source
+DRY_RUN = app_config.dry_run
+configured_timezone = app_config.configured_timezone
 
 # Initialize hardware pin (skip in dry run mode)
 if not DRY_RUN:
@@ -161,64 +116,20 @@ else:
 
     DIGITAL_PIN = MockPin()
 
-# Determine primary and backup sources.
-BACKUP_SOURCE = str(config.get("BACKUP_INPUT", "B")).upper()  # Default to B if not set
-PRIMARY_SOURCE = "B" if BACKUP_SOURCE == "A" else "A"
-if BACKUP_SOURCE not in ["A", "B"]:  # Check after assignment
-    msg = "`BACKUP_INPUT` must be either 'A' or 'B'."
-    raise ValueError(msg)
-
-
-# Colors (in decimal)
-DISCORD_EMBED_ERROR_COLOR = 16711680  # Red
-DISCORD_EMBED_WARNING_COLOR = 16776960  # Yellow
-DISCORD_EMBED_SUCCESS_COLOR = 65280  # Green
 
 # Discord base payload
-DISCORD_WEBHOOK_URL = config.get("DISCORD_WEBHOOK_URL")
 DISCORD_EMBED_PAYLOAD_BASE = {
     "embeds": [
         {
             "title": "Failsafe Gadget - Source Switched",
             "author": {
-                "name": config.get("AUTHOR_NAME") or "wbor-failsafe-notifier",
-                "url": config.get("AUTHOR_URL")
-                or "https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier",
-                "icon_url": config.get("AUTHOR_ICON_URL") or None,
+                "name": app_config.author_name,
+                "url": app_config.author_url,
+                "icon_url": app_config.author_icon_url,
             },
         }
     ],
 }
-
-# Spinitron config
-SPINITRON_API_BASE_URL = config.get("SPINITRON_API_BASE_URL")
-
-# GroupMe config
-GROUPME_API_BASE_URL = config.get("GROUPME_API_BASE_URL", "https://api.groupme.com/v3")
-GROUPME_BOT_ID_MGMT = config.get("GROUPME_BOT_ID_MGMT")
-GROUPME_BOT_ID_DJS = config.get("GROUPME_BOT_ID_DJS")
-
-# Email config
-SMTP_SERVER = config.get("SMTP_SERVER")
-SMTP_PORT = config.get("SMTP_PORT")
-SMTP_USERNAME = config.get("SMTP_USERNAME")
-SMTP_PASSWORD = config.get("SMTP_PASSWORD")
-FROM_EMAIL = config.get("FROM_EMAIL")
-ERROR_EMAIL = config.get("ERROR_EMAIL")
-
-# RabbitMQ config
-RABBITMQ_AMQP_URL = config.get("RABBITMQ_AMQP_URL")
-RABBITMQ_EXCHANGE_NAME = config.get("RABBITMQ_EXCHANGE_NAME") or "wbor_failsafe_events"
-RABBITMQ_ROUTING_KEY = config.get(
-    "RABBITMQ_ROUTING_KEY",
-    "notification.failsafe-status",
-)
-RABBITMQ_OVERRIDE_QUEUE = (
-    config.get("RABBITMQ_OVERRIDE_QUEUE") or "wbor_failsafe_override"
-)
-RABBITMQ_HEALTHCHECK_ROUTING_KEY = (
-    config.get("RABBITMQ_HEALTHCHECK_ROUTING_KEY") or "health.failsafe-status"
-)
 
 
 class OverrideManager:
@@ -241,32 +152,46 @@ class OverrideManager:
 override_manager = OverrideManager()
 
 
-def initialize_rabbitmq() -> RabbitMQPublisher | None:
-    """Initializes and returns RabbitMQPublisher if configured.
+def initialize_rabbitmq_publishers() -> dict[str, RabbitMQPublisher | None]:
+    """Initializes and returns RabbitMQ publishers for all exchanges.
 
     Returns:
-        RabbitMQPublisher instance if RABBITMQ_AMQP_URL is configured, None otherwise.
+        Dictionary mapping exchange names to RabbitMQPublisher instances.
     """
-    if RABBITMQ_AMQP_URL:
-        try:
-            publisher = RabbitMQPublisher(
-                amqp_url=RABBITMQ_AMQP_URL, exchange_name=RABBITMQ_EXCHANGE_NAME
-            )
-            logger.info(
-                "RabbitMQ publisher initialized for exchange `%s`.",
-                RABBITMQ_EXCHANGE_NAME,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to initialize RabbitMQ publisher. Proceeding without RabbitMQ."
-            )
-        else:
-            return publisher
+    publishers: dict[str, RabbitMQPublisher | None] = {
+        "notifications": None,
+        "healthcheck": None,
+        "commands": None,
+    }
+
+    if app_config.rabbitmq_amqp_url:
+        for exchange_type, exchange in [
+            ("notifications", app_config.notifications_exchange),
+            ("healthcheck", app_config.healthcheck_exchange),
+            ("commands", app_config.commands_exchange),
+        ]:
+            try:
+                publisher = RabbitMQPublisher(
+                    amqp_url=app_config.rabbitmq_amqp_url, exchange_name=exchange.name
+                )
+                publishers[exchange_type] = publisher
+                logger.info(
+                    "RabbitMQ publisher initialized for %s exchange `%s`.",
+                    exchange_type,
+                    exchange.name,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to initialize RabbitMQ publisher for %s exchange. "
+                    "Proceeding without.",
+                    exchange_type,
+                )
     else:
         logger.info(
             "RabbitMQ AMQP URL not configured. RabbitMQ publishing will be disabled."
         )
-    return None
+
+    return publishers
 
 
 def initialize_rabbitmq_consumer() -> RabbitMQConsumer | None:
@@ -275,18 +200,18 @@ def initialize_rabbitmq_consumer() -> RabbitMQConsumer | None:
     Returns:
         RabbitMQConsumer instance if RABBITMQ_AMQP_URL is configured, None otherwise.
     """
-    if RABBITMQ_AMQP_URL:
+    if app_config.rabbitmq_amqp_url:
         try:
             consumer = RabbitMQConsumer(
-                amqp_url=RABBITMQ_AMQP_URL,
-                queue_name=RABBITMQ_OVERRIDE_QUEUE,
-                exchange_name=RABBITMQ_EXCHANGE_NAME,
-                routing_key="command.failsafe-override",
+                amqp_url=app_config.rabbitmq_amqp_url,
+                queue_name=app_config.rabbitmq_override_queue,
+                exchange_name=app_config.commands_exchange.name,
+                routing_key=app_config.commands_exchange.routing_keys["override"],
                 callback=handle_override_message,
             )
             logger.info(
                 "RabbitMQ consumer initialized for queue `%s`.",
-                RABBITMQ_OVERRIDE_QUEUE,
+                app_config.rabbitmq_override_queue,
             )
         except Exception:
             logger.exception(
@@ -355,13 +280,14 @@ def check_override_expiry() -> None:
             )
 
 
-def send_health_check(publisher: RabbitMQPublisher | None) -> None:
+def send_health_check(publishers: dict[str, RabbitMQPublisher | None]) -> None:
     """Send a health check message to RabbitMQ indicating the system is alive.
 
     Publishes a heartbeat message with current system status including pin state, active
     source, and override status. Stops attempting health checks after max failures.
     """
-    if not publisher:
+    healthcheck_publisher = publishers.get("healthcheck")
+    if not healthcheck_publisher:
         return
 
     # Stop attempting health checks if we've exceeded max failures
@@ -392,7 +318,9 @@ def send_health_check(publisher: RabbitMQPublisher | None) -> None:
             else None,
         }
 
-        if publisher.publish(RABBITMQ_HEALTHCHECK_ROUTING_KEY, health_payload):
+        if healthcheck_publisher.publish(
+            app_config.healthcheck_exchange.routing_keys["health_ping"], health_payload
+        ):
             override_manager.last_healthcheck_time = current_time
             override_manager.healthcheck_failures = 0  # Reset on success
             logger.info("Health check message sent successfully")
@@ -424,12 +352,12 @@ def api_get(endpoint: str) -> dict | None:
     Returns:
         The JSON response from the API, or None if an error occurred.
     """
-    if not SPINITRON_API_BASE_URL:
+    if not app_config.spinitron_api_base_url:
         logger.warning(
             "SPINITRON_API_BASE_URL not configured. Cannot make API GET request."
         )
         return None
-    url = f"{SPINITRON_API_BASE_URL.rstrip('/')}/{endpoint.lstrip('/')}"
+    url = f"{app_config.spinitron_api_base_url.rstrip('/')}/{endpoint.lstrip('/')}"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -458,50 +386,51 @@ def send_email(subject: str, body: str, to_email: str) -> None:
     """
     logger.info("Attempting to send email to `%s` with subject: %s", to_email, subject)
 
-    if not SMTP_SERVER:
+    if not app_config.smtp_server:
         logger.error("SMTP_SERVER is not set, cannot send email.")
         return
-    if not SMTP_USERNAME:
+    if not app_config.smtp_username:
         logger.error("SMTP_USERNAME is not set, cannot send email.")
         return
-    if not SMTP_PASSWORD:
+    if not app_config.smtp_password:
         logger.error("SMTP_PASSWORD is not set, cannot send email.")
         return
-    if not FROM_EMAIL:
+    if not app_config.from_email:
         logger.error("FROM_EMAIL is not set, cannot send email.")
         return
     try:
         msg = MIMEText(body)
         msg["Subject"] = subject
         msg["To"] = to_email
-        msg["From"] = FROM_EMAIL
+        msg["From"] = app_config.from_email
 
         smtp_port_int = (
-            int(SMTP_PORT) if SMTP_PORT else 587
+            int(app_config.smtp_port) if app_config.smtp_port else 587
         )  # Default to 587 if not set (common for TLS)
 
-        with smtplib.SMTP(SMTP_SERVER, smtp_port_int, timeout=20) as server:
+        with smtplib.SMTP(app_config.smtp_server, smtp_port_int, timeout=20) as server:
             server.ehlo()
             server.starttls()
             server.ehlo()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
+            server.login(app_config.smtp_username, app_config.smtp_password)
+            server.sendmail(app_config.from_email, [to_email], msg.as_string())
         logger.info("Email successfully sent to `%s`", to_email)
     except smtplib.SMTPRecipientsRefused as e:
         logger.exception("SMTP recipients refused for `%s`: %s", to_email, e.recipients)
-        if ERROR_EMAIL and to_email != ERROR_EMAIL:  # Avoid self-notification loop
+        # Avoid self-notification loop
+        if app_config.error_email and to_email != app_config.error_email:
             send_email(
                 subject="Failsafe Gadget - SMTP Recipients Refused",
                 body=f"SMTP recipients refused for {to_email}: {e.recipients}",
-                to_email=ERROR_EMAIL,
+                to_email=app_config.error_email,
             )
     except Exception as e:
         logger.exception("Failed to send email to %s", to_email)
-        if ERROR_EMAIL and to_email != ERROR_EMAIL:
+        if app_config.error_email and to_email != app_config.error_email:
             send_email(
                 subject="Failsafe Gadget - Email Sending Failure",
                 body=f"General failure sending email to {to_email}: {e}",
-                to_email=ERROR_EMAIL,
+                to_email=app_config.error_email,
             )
 
 
@@ -590,7 +519,7 @@ def send_discord_notification(payload: dict[str, Any]) -> None:
         payload: The payload to send to the Discord webhook. Should contain
             embeds with notification details.
     """
-    if not DISCORD_WEBHOOK_URL:
+    if not app_config.discord_webhook_url:
         logger.warning(
             "DISCORD_WEBHOOK_URL not configured. Cannot send Discord notification."
         )
@@ -602,7 +531,9 @@ def send_discord_notification(payload: dict[str, Any]) -> None:
 
     try:
         logger.info("Sending notification to Discord.")
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        response = requests.post(
+            app_config.discord_webhook_url, json=payload, timeout=10
+        )
         response.raise_for_status()
         logger.debug("Discord notification sent successfully.")
     except requests.exceptions.RequestException:
@@ -656,7 +587,7 @@ def send_discord_source_change(
                 logger.exception(
                     "Error converting start time %s to %s",
                     playlist_info["start"],
-                    TIMEZONE,
+                    app_config.timezone,
                 )
 
         end_time_str = "N/A"
@@ -681,7 +612,7 @@ def send_discord_source_change(
                 logger.exception(
                     "Error converting end time %s to %s",
                     playlist_info["end"],
-                    TIMEZONE,
+                    app_config.timezone,
                 )
         fields.append(
             {
@@ -689,8 +620,8 @@ def send_discord_source_change(
                 # Value is a link to the playlist on Spinitron
                 "value": (
                     f"[{playlist_info.get('title', 'N/A')}]("
-                    f"{SPINITRON_API_BASE_URL}/playlists/{playlist_info['id']})"
-                    if SPINITRON_API_BASE_URL and playlist_info.get("id")
+                    f"{app_config.spinitron_api_base_url}/playlists/{playlist_info['id']})"
+                    if app_config.spinitron_api_base_url and playlist_info.get("id")
                     else playlist_info.get("title", "N/A")
                 ),
             }
@@ -699,8 +630,8 @@ def send_discord_source_change(
             dj_name = persona_info["name"]
             dj_id = persona_info.get("id")
             dj_value = (
-                f"[{dj_name}]({SPINITRON_API_BASE_URL}/personas/{dj_id})"
-                if SPINITRON_API_BASE_URL and dj_id
+                f"[{dj_name}]({app_config.spinitron_api_base_url}/personas/{dj_id})"
+                if app_config.spinitron_api_base_url and dj_id
                 else dj_name
             )
             fields.append({"name": "DJ", "value": dj_value})
@@ -872,8 +803,8 @@ def resolve_and_notify_dj(
             )
 
             playlist_url = (
-                f"{SPINITRON_API_BASE_URL}/playlists/{playlist.get('id')}"
-                if SPINITRON_API_BASE_URL and playlist.get("id")
+                f"{app_config.spinitron_api_base_url}/playlists/{playlist.get('id')}"
+                if app_config.spinitron_api_base_url and playlist.get("id")
                 else None
             )
             send_discord_email_alert(
@@ -889,9 +820,11 @@ def resolve_and_notify_dj(
                 "public GroupMe.",
                 playlist.get("title", "N/A"),
             )
-            if GROUPME_BOT_ID_DJS:
+            if app_config.groupme_bot_id_djs:
                 send_groupme_notification(
-                    current_source, GROUPME_BOT_ID_DJS, is_public_dj_alert=True
+                    current_source,
+                    app_config.groupme_bot_id_djs,
+                    is_public_dj_alert=True,
                 )
             else:
                 logger.warning(
@@ -915,7 +848,7 @@ def send_groupme_notification(
             "GroupMe Bot ID not configured for this alert type. Skipping notification."
         )
         return
-    if not GROUPME_API_BASE_URL:
+    if not app_config.groupme_api_base_url:
         logger.warning(
             "`GROUPME_API_BASE_URL` not configured. Cannot send GroupMe message."
         )
@@ -952,7 +885,9 @@ def send_groupme_notification(
             bot_id[:5] if bot_id else "N/A",
         )
         response = requests.post(
-            f"{GROUPME_API_BASE_URL.rstrip('/')}/bots/post", json=payload, timeout=10
+            f"{app_config.groupme_api_base_url.rstrip('/')}/bots/post",
+            json=payload,
+            timeout=10,
         )
         response.raise_for_status()
         logger.debug("GroupMe message sent successfully.")
@@ -964,7 +899,7 @@ def send_groupme_notification(
 
 
 def main_loop(
-    local_rabbitmq_publisher: RabbitMQPublisher | None,
+    local_rabbitmq_publishers: dict[str, RabbitMQPublisher | None],
     local_rabbitmq_consumer: RabbitMQConsumer | None,
 ) -> None:
     """Monitor digital pin and send webhook on state change.
@@ -973,7 +908,8 @@ def main_loop(
     notifications when failsafe source switching occurs.
 
     Args:
-        local_rabbitmq_publisher: RabbitMQ publisher for sending notifications.
+        local_rabbitmq_publishers: Dictionary of RabbitMQ publishers for
+            different exchanges.
         local_rabbitmq_consumer: RabbitMQ consumer for receiving override commands.
     """
     prev_pin_state = DIGITAL_PIN.value
@@ -999,7 +935,7 @@ def main_loop(
             check_override_expiry()
 
             # Send health check if needed
-            send_health_check(local_rabbitmq_publisher)
+            send_health_check(local_rabbitmq_publishers)
 
             current_pin_state = DIGITAL_PIN.value
             current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
@@ -1025,7 +961,7 @@ def main_loop(
                 persona_data: dict[str, Any] | None = None
 
                 # Only fetch Spinitron if configured
-                if SPINITRON_API_BASE_URL:
+                if app_config.spinitron_api_base_url:
                     playlist_data = get_current_playlist()
                     if playlist_data:
                         persona_data = resolve_and_notify_dj(
@@ -1033,18 +969,21 @@ def main_loop(
                         )
 
                 # Send Discord Source Change Notification
-                if DISCORD_WEBHOOK_URL:
+                if app_config.discord_webhook_url:
                     send_discord_source_change(
                         current_source, playlist_data, persona_data
                     )
 
                 # Send GroupMe Management Notification
-                if GROUPME_BOT_ID_MGMT:
+                if app_config.groupme_bot_id_mgmt:
                     send_groupme_notification(
-                        current_source, GROUPME_BOT_ID_MGMT, is_public_dj_alert=False
+                        current_source,
+                        app_config.groupme_bot_id_mgmt,
+                        is_public_dj_alert=False,
                     )
 
-                if local_rabbitmq_publisher:
+                notifications_publisher = local_rabbitmq_publishers.get("notifications")
+                if notifications_publisher:
                     rabbitmq_payload = {
                         "source_application": "wbor-failsafe-notifier",
                         "event_type": "source_change",
@@ -1058,13 +997,15 @@ def main_loop(
                             "persona": persona_data if persona_data else {},
                         },
                     }
+                    routing_key = app_config.notifications_exchange.routing_keys[
+                        "source_change"
+                    ]
                     logger.info(
                         "Publishing source change event to RabbitMQ with routing key "
                         "`%s`.",
-                        RABBITMQ_ROUTING_KEY,
+                        routing_key,
                     )
-                    routing_key = RABBITMQ_ROUTING_KEY or "notification.failsafe-status"
-                    if not local_rabbitmq_publisher.publish(
+                    if not notifications_publisher.publish(
                         routing_key, rabbitmq_payload
                     ):
                         logger.error(
@@ -1087,11 +1028,11 @@ def main() -> None:
     Initializes RabbitMQ connections, sets up signal handlers for graceful shutdown, and
     starts the main monitoring loop. Handles cleanup on exit.
     """
-    local_rabbitmq_publisher: RabbitMQPublisher | None = None
+    local_rabbitmq_publishers: dict[str, RabbitMQPublisher | None] = {}
     local_rabbitmq_consumer: RabbitMQConsumer | None = None
     try:
         if DRY_RUN:
-            logger.info("Starting WBOR Failsafe Notifier v1.4.0 in DRY_RUN mode...")
+            logger.info("Starting WBOR Failsafe Notifier in DRY_RUN mode...")
             logger.info("Configuration validation successful")
             logger.info(
                 "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
@@ -1101,7 +1042,7 @@ def main() -> None:
             )
             return
 
-        logger.info("Starting WBOR Failsafe Notifier v1.4.0...")
+        logger.info("Starting WBOR Failsafe Notifier...")
         logger.info(
             "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
             PRIMARY_SOURCE,
@@ -1109,9 +1050,9 @@ def main() -> None:
             PIN_NAME,
         )
 
-        local_rabbitmq_publisher = initialize_rabbitmq()
+        local_rabbitmq_publishers = initialize_rabbitmq_publishers()
         local_rabbitmq_consumer = initialize_rabbitmq_consumer()
-        main_loop(local_rabbitmq_publisher, local_rabbitmq_consumer)
+        main_loop(local_rabbitmq_publishers, local_rabbitmq_consumer)
 
     except ValueError as e:
         logger.critical("Configuration error: %s. Exiting.", e)
@@ -1125,8 +1066,9 @@ def main() -> None:
         logger.info("WBOR Failsafe Notifier shutting down.")
         if local_rabbitmq_consumer:
             local_rabbitmq_consumer.stop_consuming()
-        if local_rabbitmq_publisher:
-            local_rabbitmq_publisher.close()
+        for publisher in local_rabbitmq_publishers.values():
+            if publisher:
+                publisher.close()
         logger.info("Shutdown complete.")
 
 
