@@ -18,8 +18,14 @@ COPY consumer.py .
 RUN useradd --create-home --shell /bin/bash monitor
 USER monitor
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+# Health check - verify RabbitMQ connection and consumer is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import pika, os, sys; \
+    try: \
+        conn = pika.BlockingConnection(pika.URLParameters(os.environ['RABBITMQ_URL'])); \
+        conn.close(); \
+        sys.exit(0) \
+    except Exception: \
+        sys.exit(1)"
 
 CMD ["python", "consumer.py"]
