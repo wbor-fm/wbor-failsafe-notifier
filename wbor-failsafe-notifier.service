@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=simple
 # Run the service as a specific user (e.g., 'pi'). Change to match your user!
-User=pi5
+User=$USER
 # Set the working directory to the directory containing your script.
-WorkingDirectory=/home/pi5/Scripts/wbor-failsafe-notifier
+WorkingDirectory=/home/$USER/Scripts/wbor-failsafe-notifier
 # Use the virtual environment's Python.
-ExecStart=/home/pi5/Scripts/wbor-failsafe-notifier/venv/bin/python /home/pi5/Scripts/wbor-failsafe-notifier/failsafe.py
+ExecStart=/home/$USER/Scripts/wbor-failsafe-notifier/.venv/bin/python /home/$USER/Scripts/wbor-failsafe-notifier/failsafe.py
 # Required to work!
 Environment=BLINKA_FT232H=1
 # Restart the service automatically on failure.
