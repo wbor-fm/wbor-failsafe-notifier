@@ -41,6 +41,7 @@ The script is written to suit **our needs**, but you can easily modify it to sui
    ```
 
 2. **Install dependencies:**
+   You can use either `uv` (recommended, [installation instructions](https://docs.astral.sh/uv/getting-started/installation/)) or `pip` to manage dependencies.
 
    ```bash
    # Using uv (recommended)
