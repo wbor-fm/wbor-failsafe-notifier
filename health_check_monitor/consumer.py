@@ -10,13 +10,22 @@ import threading
 import time
 from typing import NoReturn
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
 import pika
 import requests
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 class HealthCheckMonitor:
@@ -39,6 +48,8 @@ class HealthCheckMonitor:
         self.timeout_threshold = int(
             os.getenv("TIMEOUT_THRESHOLD_SECONDS", "600")
         )  # 10 minutes default
+        self.timezone_str = os.getenv("TIMEZONE", "America/New_York")
+        self.timezone = ZoneInfo(self.timezone_str)
 
         self.last_health_check: datetime | None = None
         self.connection: pika.BlockingConnection | None = None
@@ -49,6 +60,10 @@ class HealthCheckMonitor:
             logger.error("DISCORD_WEBHOOK_URL environment variable is required")
             msg = "Discord webhook URL not configured"
             raise ValueError(msg)
+
+        logger.info(
+            "Health check monitor configured with timezone: %s", self.timezone_str
+        )
 
     def connect_rabbitmq(self) -> None:
         """Connect to RabbitMQ and declare the exchange, queue, and binding."""
@@ -85,13 +100,20 @@ class HealthCheckMonitor:
             raise
 
     def send_discord_alert(self, message: str) -> None:
-        """Send an alert message to Discord via webhook."""
+        """Send an alert message to Discord via webhook.
+
+        Args:
+            message: The alert message to send.
+        """
         if not self.discord_webhook_url:
             logger.error("Discord webhook URL not configured")
             return
 
         try:
-            payload = {"content": message, "username": "Health Check Monitor"}
+            payload = {
+                "content": message,
+                "username": "wbor-failsafe-notifier Health Monitor",
+            }
             response = requests.post(self.discord_webhook_url, json=payload, timeout=30)
             response.raise_for_status()
             logger.info("Discord alert sent successfully")
@@ -105,11 +127,25 @@ class HealthCheckMonitor:
         _properties: pika.spec.BasicProperties,  # type: ignore[attr-defined]
         body: bytes,
     ) -> None:
-        """Process incoming health check messages from RabbitMQ."""
+        """Process incoming health check messages from RabbitMQ.
+
+        Args:
+            ch: The channel object.
+            method: Delivery method containing delivery information.
+            _properties: Message properties (unused).
+            body: The message body as bytes.
+        """
         try:
             message = json.loads(body.decode("utf-8"))
             self.last_health_check = datetime.now(timezone.utc)
-            logger.info("Received health check: %s", message)
+            # Log with local timezone for readability
+            local_time = self.last_health_check.astimezone(self.timezone)
+            logger.info(
+                "Received health check at %s (%s): %s",
+                local_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                self.timezone_str,
+                message,
+            )
             ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception:
             logger.exception("Error processing health check message")
@@ -133,14 +169,17 @@ class HealthCheckMonitor:
 
             if time_since_last_check.total_seconds() > self.timeout_threshold:
                 seconds_since = int(time_since_last_check.total_seconds())
-                last_check_str = self.last_health_check.strftime("%Y-%m-%d %H:%M:%S")
+                # Convert UTC timestamp to local timezone for display
+                last_check_local = self.last_health_check.astimezone(self.timezone)
+                last_check_str = last_check_local.strftime("%Y-%m-%d %H:%M:%S %Z")
                 alert_message = (
-                    "🚨 **Health Check Alert** 🚨\n"
-                    f"No health check received from `failsafe.py` for {seconds_since} "
-                    "seconds\n"
+                    "🚨 **WBOR Failsafe Notifier Health Check Alert** 🚨\n"
+                    "No health check received from `wbor-failsafe-notifer` for "
+                    f"{seconds_since} seconds\n"
                     f"Last health check: `{last_check_str}`\n"
                     f"Threshold: `{self.timeout_threshold}` seconds\n\n"
-                    "Please investigate that the failsafe device is powered on."
+                    "Please investigate that the failsafe system is powered on and the "
+                    "serial connection is working properly."
                 )
                 logger.warning(
                     "Health check timeout detected: %s seconds",
@@ -152,13 +191,21 @@ class HealthCheckMonitor:
                 self.last_health_check = current_time
 
     def _ensure_channel(self) -> None:
-        """Ensure RabbitMQ channel is established."""
+        """Ensure RabbitMQ channel is established.
+
+        Raises:
+            RuntimeError: If channel is not available.
+        """
         if not self.channel:
             msg = "Failed to establish RabbitMQ channel"
             raise RuntimeError(msg)
 
     def _raise_channel_error(self) -> NoReturn:
-        """Raise an error when RabbitMQ channel is not initialized."""
+        """Raise an error when RabbitMQ channel is not initialized.
+
+        Raises:
+            ValueError: Always raised with channel error message.
+        """
         msg = "RabbitMQ channel is not initialized"
         raise ValueError(msg)
 

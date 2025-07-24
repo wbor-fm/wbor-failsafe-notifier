@@ -1,5 +1,5 @@
-IMAGE_NAME = wbor-health-check-monitor-image
-CONTAINER_NAME = wbor-health-check-monitor
+IMAGE_NAME = wbor-failsafe-health-check-monitor-image
+CONTAINER_NAME = wbor-failsafe-health-check-monitor
 NETWORK_NAME = wbor-network
 HOST_DIR = $(PWD)
 

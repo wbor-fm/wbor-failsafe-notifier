@@ -15,10 +15,11 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-300}
       - TIMEOUT_THRESHOLD_SECONDS=${TIMEOUT_THRESHOLD_SECONDS:-600}
+      - TIMEZONE=${TIMEZONE:-America/New_York}
     depends_on:
       - rabbitmq
     networks:
-      - health-monitor-network
+      - failsafe-network
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -37,11 +38,11 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
-      - health-monitor-network
+      - failsafe-network
 
 volumes:
   rabbitmq_data:
 
 networks:
-  health-monitor-network:
+  failsafe-network:
     driver: bridge
