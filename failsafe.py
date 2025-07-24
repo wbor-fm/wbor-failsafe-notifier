@@ -233,6 +233,8 @@ class OverrideManager:
         self.active = False
         self.end_time: datetime | None = None
         self.last_healthcheck_time: datetime | None = None
+        self.healthcheck_failures = 0
+        self.max_healthcheck_failures = 5
 
 
 # Global state manager for temporary override functionality
@@ -357,9 +359,16 @@ def send_health_check(publisher: RabbitMQPublisher | None) -> None:
     """Send a health check message to RabbitMQ indicating the system is alive.
 
     Publishes a heartbeat message with current system status including pin state, active
-    source, and override status.
+    source, and override status. Stops attempting health checks after max failures.
     """
     if not publisher:
+        return
+
+    # Stop attempting health checks if we've exceeded max failures
+    if (
+        override_manager.healthcheck_failures
+        >= override_manager.max_healthcheck_failures
+    ):
         return
 
     current_time = datetime.now(timezone.utc)
@@ -385,9 +394,25 @@ def send_health_check(publisher: RabbitMQPublisher | None) -> None:
 
         if publisher.publish(RABBITMQ_HEALTHCHECK_ROUTING_KEY, health_payload):
             override_manager.last_healthcheck_time = current_time
+            override_manager.healthcheck_failures = 0  # Reset on success
             logger.info("Health check message sent successfully")
         else:
-            logger.error("Failed to send health check message")
+            override_manager.healthcheck_failures += 1
+            logger.error(
+                "Failed to send health check message (attempt %d/%d)",
+                override_manager.healthcheck_failures,
+                override_manager.max_healthcheck_failures,
+            )
+            if (
+                override_manager.healthcheck_failures
+                >= override_manager.max_healthcheck_failures
+            ):
+                logger.warning(
+                    "Maximum health check failures reached (%d). Disabling health "
+                    "check messages to prevent infinite retries. Check RabbitMQ "
+                    "configuration.",
+                    override_manager.max_healthcheck_failures,
+                )
 
 
 def api_get(endpoint: str) -> dict | None:
