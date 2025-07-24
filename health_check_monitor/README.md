@@ -26,13 +26,19 @@ Required environment variables:
 Optional configuration variables:
 
 - `HEALTH_CHECK_QUEUE`: Queue name for health check messages (default: `health_checks`)
-- `RABBITMQ_EXCHANGE_NAME`: Exchange name for health check messages (default: `wbor_failsafe_events`)  
-- `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Routing key for health check messages (default: `health.failsafe-status`, the same as the main notifier)
+- `RABBITMQ_EXCHANGE_NAME`: Exchange name for health check messages (default: `healthcheck`)  
+- `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Routing key for health check messages (default: `health.failsafe-status`)
 - `CHECK_INTERVAL_SECONDS`: How often to check for timeouts (default: `300`)
 - `TIMEOUT_THRESHOLD_SECONDS`: Timeout threshold before alerting (default: `600`)
 
 **RabbitMQ Message Routing:**
-The consumer automatically binds the health check queue to the specified exchange with the routing key. This allows it to receive health check messages published by the main failsafe notifier service.
+The consumer automatically binds the health check queue to the specified exchange with the routing key. This follows the recommended RabbitMQ routing scheme:
+
+- **`healthcheck` exchange** + `health.failsafe-status` key → Health check monitoring messages
+- **`notifications` exchange** + `notification.failsafe-status` key → Failsafe status change alerts  
+- **`commands` exchange** + `command.failsafe-override` key → Override commands
+
+This separation allows for better message organization and targeted consumption patterns.
 
 ## Usage
 

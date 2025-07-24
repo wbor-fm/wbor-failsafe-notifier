@@ -26,7 +26,7 @@ class HealthCheckMonitor:
             "RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"
         )
         self.queue_name = os.getenv("HEALTH_CHECK_QUEUE", "health_checks")
-        self.exchange_name = os.getenv("RABBITMQ_EXCHANGE_NAME", "wbor_failsafe_events")
+        self.exchange_name = os.getenv("RABBITMQ_EXCHANGE_NAME", "healthcheck")
         self.routing_key = os.getenv(
             "RABBITMQ_HEALTHCHECK_ROUTING_KEY", "health.failsafe-status"
         )
