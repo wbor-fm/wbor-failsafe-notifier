@@ -3,11 +3,13 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - HEALTH_CHECK_QUEUE=health_checks
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      - HEALTH_CHECK_QUEUE=${HEALTH_CHECK_QUEUE:-health_checks}
+      - RABBITMQ_EXCHANGE_NAME=${RABBITMQ_EXCHANGE_NAME:-healthcheck}
+      - RABBITMQ_HEALTHCHECK_ROUTING_KEY=${RABBITMQ_HEALTHCHECK_ROUTING_KEY:-health.failsafe-status}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
-      - CHECK_INTERVAL_SECONDS=300
-      - TIMEOUT_THRESHOLD_SECONDS=600
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-300}
+      - TIMEOUT_THRESHOLD_SECONDS=${TIMEOUT_THRESHOLD_SECONDS:-600}
     depends_on:
       - rabbitmq
     networks:

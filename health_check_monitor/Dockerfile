@@ -13,19 +13,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY consumer.py .
+COPY healthcheck.py .
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash monitor
 USER monitor
 
 # Health check - verify RabbitMQ connection and consumer is running
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import pika, os, sys; \
-    try: \
-        conn = pika.BlockingConnection(pika.URLParameters(os.environ['RABBITMQ_URL'])); \
-        conn.close(); \
-        sys.exit(0) \
-    except Exception: \
-        sys.exit(1)"
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
+    CMD python healthcheck.py
 
 CMD ["python", "consumer.py"]
