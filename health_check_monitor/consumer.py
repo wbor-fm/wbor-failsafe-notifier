@@ -136,6 +136,11 @@ class HealthCheckMonitor:
             body: The message body as bytes.
         """
         try:
+            # Check if this message matches our routing key
+            if method.routing_key != self.routing_key:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
             message = json.loads(body.decode("utf-8"))
             self.last_health_check = datetime.now(timezone.utc)
             # Log with local timezone for readability
@@ -174,7 +179,7 @@ class HealthCheckMonitor:
                 last_check_str = last_check_local.strftime("%Y-%m-%d %H:%M:%S %Z")
                 alert_message = (
                     "🚨 **WBOR Failsafe Notifier Health Check Alert** 🚨\n"
-                    "No health check received from `wbor-failsafe-notifer` for "
+                    "No health check received from `wbor-failsafe-notifier` for "
                     f"{seconds_since} seconds\n"
                     f"Last health check: `{last_check_str}`\n"
                     f"Threshold: `{self.timeout_threshold}` seconds\n\n"
