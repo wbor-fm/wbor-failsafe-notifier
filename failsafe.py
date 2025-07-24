@@ -146,6 +146,11 @@ class OverrideManager:
         self.last_healthcheck_time: datetime | None = None
         self.healthcheck_failures = 0
         self.max_healthcheck_failures = 5
+        self.state_changed_during_override = False
+        self.pending_source_change: tuple[str, str] | None = None
+        self.override_logged = False
+        self.original_source_before_override: str | None = None
+        self.last_healthcheck_retry_time: datetime | None = None
 
 
 # Global state manager for temporary override functionality
@@ -245,6 +250,10 @@ def handle_override_message(message: dict[str, Any]) -> None:
             override_manager.end_time = datetime.now(timezone.utc) + timedelta(
                 minutes=duration_minutes
             )
+            override_manager.state_changed_during_override = False
+            override_manager.pending_source_change = None
+            override_manager.override_logged = False
+            override_manager.original_source_before_override = None
 
             logger.info(
                 "Temporary override activated for %d minutes (until %s UTC)",
@@ -255,6 +264,10 @@ def handle_override_message(message: dict[str, Any]) -> None:
         elif action == "disable_override":
             override_manager.active = False
             override_manager.end_time = None
+            override_manager.state_changed_during_override = False
+            override_manager.pending_source_change = None
+            override_manager.override_logged = False
+            override_manager.original_source_before_override = None
             logger.info("Temporary override manually disabled")
 
         else:
@@ -264,42 +277,62 @@ def handle_override_message(message: dict[str, Any]) -> None:
         logger.exception("Error processing override message")
 
 
-def check_override_expiry() -> None:
+def check_override_expiry() -> bool:
     """Check if the temporary override has expired and disable it if so.
 
     Compares current time with override end time and resets override state if the period
     has elapsed.
+
+    Returns:
+        True if override just expired, False otherwise
     """
     if override_manager.active and override_manager.end_time:
         current_time = datetime.now(timezone.utc)
         if current_time >= override_manager.end_time:
             override_manager.active = False
             override_manager.end_time = None
+            override_manager.override_logged = False
             logger.info(
                 "Temporary override expired/disabled: returning to normal operation"
             )
+            return True
+    return False
 
 
 def send_health_check(publishers: dict[str, RabbitMQPublisher | None]) -> None:
     """Send a health check message to RabbitMQ indicating the system is alive.
 
     Publishes a heartbeat message with current system status including pin state, active
-    source, and override status. Stops attempting health checks after max failures.
+    source, and override status. After max failures, retries every hour to allow
+    recovery if RabbitMQ comes back online.
     """
     healthcheck_publisher = publishers.get("healthcheck")
     if not healthcheck_publisher:
         return
 
-    # Stop attempting health checks if we've exceeded max failures
+    current_time = datetime.now(timezone.utc)
+
+    # If we've exceeded max failures, only retry every hour
     if (
         override_manager.healthcheck_failures
         >= override_manager.max_healthcheck_failures
     ):
-        return
+        # Check if it's time for an hourly retry
+        if (
+            override_manager.last_healthcheck_retry_time is None
+            or current_time - override_manager.last_healthcheck_retry_time
+            >= timedelta(hours=1)
+        ):
+            logger.info(
+                "Attempting hourly health check retry after %d failures",
+                override_manager.healthcheck_failures,
+            )
+            override_manager.last_healthcheck_retry_time = current_time
+            # Continue to attempt sending below
+        else:
+            return  # Skip if not time for retry yet
 
-    current_time = datetime.now(timezone.utc)
-
-    # Send health check every hour
+    # Send health check every hour (or during retry attempts)
     if (
         override_manager.last_healthcheck_time is None
         or current_time - override_manager.last_healthcheck_time >= timedelta(hours=1)
@@ -322,23 +355,42 @@ def send_health_check(publishers: dict[str, RabbitMQPublisher | None]) -> None:
             app_config.healthcheck_exchange.routing_keys["health_ping"], health_payload
         ):
             override_manager.last_healthcheck_time = current_time
+
+            # If this was a successful retry after failures, log recovery
+            if (
+                override_manager.healthcheck_failures
+                >= override_manager.max_healthcheck_failures
+            ):
+                logger.info(
+                    "Health check publishing recovered after %d failures. "
+                    "RabbitMQ connection restored.",
+                    override_manager.healthcheck_failures,
+                )
+
             override_manager.healthcheck_failures = 0  # Reset on success
             logger.info("Health check message sent successfully")
         else:
-            override_manager.healthcheck_failures += 1
+            # Only increment failures if we haven't reached max yet
+            # (to avoid inflating the counter during hourly retries)
+            if (
+                override_manager.healthcheck_failures
+                < override_manager.max_healthcheck_failures
+            ):
+                override_manager.healthcheck_failures += 1
+
             logger.error(
                 "Failed to send health check message (attempt %d/%d)",
                 override_manager.healthcheck_failures,
                 override_manager.max_healthcheck_failures,
             )
+
             if (
                 override_manager.healthcheck_failures
                 >= override_manager.max_healthcheck_failures
             ):
                 logger.warning(
-                    "Maximum health check failures reached (%d). Disabling health "
-                    "check messages to prevent infinite retries. Check RabbitMQ "
-                    "configuration.",
+                    "Maximum health check failures reached (%d). Will retry every hour "
+                    "until RabbitMQ connection is restored.",
                     override_manager.max_healthcheck_failures,
                 )
 
@@ -898,6 +950,60 @@ def send_groupme_notification(
         )
 
 
+def send_all_source_change_notifications(
+    current_source: str,
+    prev_source: str,
+    *,
+    current_pin_state: bool,
+    local_rabbitmq_publishers: dict[str, RabbitMQPublisher | None],
+) -> None:
+    """Send all configured notifications for a source change."""
+    playlist_data: dict[str, Any] | None = None
+    persona_data: dict[str, Any] | None = None
+
+    # Only fetch Spinitron if configured
+    if app_config.spinitron_api_base_url:
+        playlist_data = get_current_playlist()
+        if playlist_data:
+            persona_data = resolve_and_notify_dj(playlist_data, current_source)
+
+    # Send Discord Source Change Notification
+    if app_config.discord_webhook_url:
+        send_discord_source_change(current_source, playlist_data, persona_data)
+
+    # Send GroupMe Management Notification
+    if app_config.groupme_bot_id_mgmt:
+        send_groupme_notification(
+            current_source,
+            app_config.groupme_bot_id_mgmt,
+            is_public_dj_alert=False,
+        )
+
+    # Send RabbitMQ notification
+    notifications_publisher = local_rabbitmq_publishers.get("notifications")
+    if notifications_publisher:
+        rabbitmq_payload = {
+            "source_application": "wbor-failsafe-notifier",
+            "event_type": "source_change",
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "pin_name": PIN_NAME,
+            "current_pin_state": current_pin_state,
+            "active_source": current_source,
+            "previous_active_source": prev_source,
+            "details": {
+                "playlist": playlist_data if playlist_data else {},
+                "persona": persona_data if persona_data else {},
+            },
+        }
+        routing_key = app_config.notifications_exchange.routing_keys["source_change"]
+        logger.info(
+            "Publishing source change event to RabbitMQ with routing key `%s`.",
+            routing_key,
+        )
+        if not notifications_publisher.publish(routing_key, rabbitmq_payload):
+            logger.error("Failed to publish source change event to RabbitMQ.")
+
+
 def main_loop(
     local_rabbitmq_publishers: dict[str, RabbitMQPublisher | None],
     local_rabbitmq_consumer: RabbitMQConsumer | None,
@@ -922,32 +1028,25 @@ def main_loop(
     )
 
     # Start the RabbitMQ consumer if available
+    # (Used for override commands)
     if local_rabbitmq_consumer:
         if local_rabbitmq_consumer.start_consuming():
             logger.info("RabbitMQ consumer started successfully")
         else:
             logger.error("Failed to start RabbitMQ consumer")
 
-    # Wait for the pin to change state
+    # The core of the app: wait for the pin to change state
     while True:
         try:
-            # Check for override expiry
-            check_override_expiry()
+            # Check for override expiry and handle pending notifications
+            override_just_expired = check_override_expiry()
 
-            # Send health check if needed
             send_health_check(local_rabbitmq_publishers)
 
             current_pin_state = DIGITAL_PIN.value
             current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
 
-            # Check if we should skip processing due to active override
-            if override_manager.active:
-                logger.debug("Override is active, skipping state change processing")
-                prev_pin_state = current_pin_state
-                prev_source = current_source
-                time.sleep(0.5)
-                continue
-
+            # Always detect and log state changes
             if current_pin_state != prev_pin_state:
                 logger.info(
                     "Source changed from `%s` (pin: %s) to `%s` (pin: %s)",
@@ -957,63 +1056,68 @@ def main_loop(
                     current_pin_state,
                 )
 
-                playlist_data: dict[str, Any] | None = None
-                persona_data: dict[str, Any] | None = None
+                if override_manager.active:
+                    # Capture original source when override first becomes active
+                    if override_manager.original_source_before_override is None:
+                        override_manager.original_source_before_override = prev_source
 
-                # Only fetch Spinitron if configured
-                if app_config.spinitron_api_base_url:
-                    playlist_data = get_current_playlist()
-                    if playlist_data:
-                        persona_data = resolve_and_notify_dj(
-                            playlist_data, current_source
+                    # Log once that override is active during state change
+                    if not override_manager.override_logged:
+                        logger.info(
+                            "Override is active, notifications suppressed for this "
+                            "state change"
                         )
-
-                # Send Discord Source Change Notification
-                if app_config.discord_webhook_url:
-                    send_discord_source_change(
-                        current_source, playlist_data, persona_data
-                    )
-
-                # Send GroupMe Management Notification
-                if app_config.groupme_bot_id_mgmt:
-                    send_groupme_notification(
+                        override_manager.override_logged = True
+                    # Track that state changed during override
+                    override_manager.state_changed_during_override = True
+                    override_manager.pending_source_change = (
+                        prev_source,
                         current_source,
-                        app_config.groupme_bot_id_mgmt,
-                        is_public_dj_alert=False,
+                    )
+                else:
+                    # Send notifications normally when override is not active
+                    send_all_source_change_notifications(
+                        current_source,
+                        prev_source,
+                        current_pin_state=current_pin_state,
+                        local_rabbitmq_publishers=local_rabbitmq_publishers,
                     )
 
-                notifications_publisher = local_rabbitmq_publishers.get("notifications")
-                if notifications_publisher:
-                    rabbitmq_payload = {
-                        "source_application": "wbor-failsafe-notifier",
-                        "event_type": "source_change",
-                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                        "pin_name": PIN_NAME,
-                        "current_pin_state": current_pin_state,
-                        "active_source": current_source,
-                        "previous_active_source": prev_source,
-                        "details": {
-                            "playlist": playlist_data if playlist_data else {},
-                            "persona": persona_data if persona_data else {},
-                        },
-                    }
-                    routing_key = app_config.notifications_exchange.routing_keys[
-                        "source_change"
-                    ]
+            # Handle notifications after override expires
+            elif (
+                override_just_expired and override_manager.state_changed_during_override
+            ):
+                # Only send notification if current source differs from original source
+                if (
+                    override_manager.original_source_before_override is not None
+                    and current_source
+                    != override_manager.original_source_before_override
+                ):
                     logger.info(
-                        "Publishing source change event to RabbitMQ with routing key "
-                        "`%s`.",
-                        routing_key,
+                        "Override expired, sending delayed notification for source "
+                        "change from `%s` to `%s`",
+                        override_manager.original_source_before_override,
+                        current_source,
                     )
-                    if not notifications_publisher.publish(
-                        routing_key, rabbitmq_payload
-                    ):
-                        logger.error(
-                            "Failed to publish source change event to RabbitMQ."
-                        )
+                    send_all_source_change_notifications(
+                        current_source,
+                        override_manager.original_source_before_override,
+                        current_pin_state=current_pin_state,
+                        local_rabbitmq_publishers=local_rabbitmq_publishers,
+                    )
+                else:
+                    logger.info(
+                        "Override expired, but source returned to original state (%s), "
+                        "no notification needed",
+                        override_manager.original_source_before_override or "unknown",
+                    )
+                override_manager.state_changed_during_override = False
+                override_manager.pending_source_change = None
+                override_manager.original_source_before_override = None
 
-                prev_pin_state = current_pin_state
-                prev_source = current_source
+            # Update state tracking
+            prev_pin_state = current_pin_state
+            prev_source = current_source
 
             time.sleep(0.5)  # Check interval for pin state
 
@@ -1032,14 +1136,18 @@ def main() -> None:
     local_rabbitmq_consumer: RabbitMQConsumer | None = None
     try:
         if DRY_RUN:
-            logger.info("Starting WBOR Failsafe Notifier in DRY_RUN mode...")
-            logger.info("Configuration validation successful")
+            logger.info("Starting WBOR Failsafe Notifier in DRY_RUN mode (CI)...")
             logger.info(
                 "Primary Source: `%s`, Backup Source: `%s`, Monitored Pin: `%s`",
                 PRIMARY_SOURCE,
                 BACKUP_SOURCE,
                 PIN_NAME,
             )
+
+            # Don't initialize RabbitMQ or GPIO in DRY_RUN mode
+            logger.info("Skipping RabbitMQ and GPIO initialization in DRY_RUN mode.")
+            logger.info("Skipping main loop in DRY_RUN mode.")
+            logger.info("WBOR Failsafe Notifier DRY_RUN mode complete.")
             return
 
         logger.info("Starting WBOR Failsafe Notifier...")
