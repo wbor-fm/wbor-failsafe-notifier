@@ -248,11 +248,37 @@ Replace `username:password` and `rabbitmq.example.com` with your RabbitMQ creden
 │   ├── logging.py            # Logging configuration
 │   ├── rabbitmq_publisher.py # RabbitMQ publishing
 │   └── rabbitmq_consumer.py  # RabbitMQ consuming
+├── health_check_monitor/     # Health check monitoring container
+│   ├── Dockerfile            # Container build file
+│   ├── docker-compose.yml    # Multi-service setup
+│   ├── consumer.py           # Health check consumer
+│   └── README.md             # Container-specific docs
 ├── pyproject.toml            # Project configuration
 ├── Makefile                  # Development commands
 ├── uv.lock                   # Dependency lock file
 └── requirements.txt          # Python dependencies (legacy)
 ```
+
+### Health Check Monitor Container
+
+The `health_check_monitor/` directory contains a Docker container that monitors RabbitMQ health check messages and sends Discord alerts when health checks are missed. This is useful for monitoring the main failsafe notifier service to ensure it's running properly.
+
+**Key Features:**
+
+* Consumes health check messages from RabbitMQ queue
+* Monitors for missing health checks with configurable timeout
+* Sends Discord webhook alerts when timeouts occur
+* Dockerized for easy deployment alongside existing infrastructure
+
+**Quick Start:**
+
+```bash
+cd health_check_monitor
+cp .env.example .env    # Configure environment
+docker-compose up -d    # Start with included RabbitMQ (or configure your own)
+```
+
+See `health_check_monitor/README.md` for detailed configuration and deployment options.
 
 ### Contributing
 
