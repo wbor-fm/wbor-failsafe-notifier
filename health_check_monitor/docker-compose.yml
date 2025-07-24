@@ -1,0 +1,35 @@
+services:
+  health-check-monitor:
+    build: .
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - HEALTH_CHECK_QUEUE=health_checks
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - CHECK_INTERVAL_SECONDS=300
+      - TIMEOUT_THRESHOLD_SECONDS=600
+    depends_on:
+      - rabbitmq
+    networks:
+      - health-monitor-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - health-monitor-network
+
+volumes:
+  rabbitmq_data:
+
+networks:
+  health-monitor-network:
+    driver: bridge
