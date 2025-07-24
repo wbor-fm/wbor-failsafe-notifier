@@ -22,13 +22,57 @@ Required environment variables:
 
 - `DISCORD_WEBHOOK_URL`: Discord webhook URL for alerts
 - `RABBITMQ_URL`: RabbitMQ connection string
-- `HEALTH_CHECK_QUEUE`: Queue name for health check messages
+
+Optional configuration variables:
+
+- `HEALTH_CHECK_QUEUE`: Queue name for health check messages (default: `health_checks`)
+- `RABBITMQ_EXCHANGE_NAME`: Exchange name for health check messages (default: `wbor_failsafe_events`)  
+- `RABBITMQ_HEALTHCHECK_ROUTING_KEY`: Routing key for health check messages (default: `health.failsafe-status`, the same as the main notifier)
 - `CHECK_INTERVAL_SECONDS`: How often to check for timeouts (default: `300`)
 - `TIMEOUT_THRESHOLD_SECONDS`: Timeout threshold before alerting (default: `600`)
 
+**RabbitMQ Message Routing:**
+The consumer automatically binds the health check queue to the specified exchange with the routing key. This allows it to receive health check messages published by the main failsafe notifier service.
+
 ## Usage
 
-### Using Docker Compose (Recommended)
+### Using Makefile (Recommended)
+
+The included Makefile provides convenient commands for container management:
+
+```bash
+# Quick rebuild and run (stops existing container, builds, runs, follows logs)
+make
+
+# Build the image
+make build
+
+# Run the container (creates logs directory, uses .env file)
+make run
+
+# Follow container logs
+make logsf
+
+# Check container health status
+make health
+
+# Execute shell in running container
+make exec
+
+# Stop and remove container
+make stop
+
+# Clean up (stop container and remove image)
+make clean
+```
+
+**Environment Configuration:**
+
+- The Makefile uses `.env` file for configuration
+- Supports both Docker and Podman via `DOCKER_TOOL` environment variable
+- Creates local `logs/` directory for persistent logging
+
+### Using Docker Compose
 
 ```bash
 # Start the services
@@ -40,6 +84,14 @@ docker-compose logs -f health-check-monitor
 # Stop the services
 docker-compose down
 ```
+
+**Environment Variable Precedence (highest to lowest):**
+
+1. Command line variables (`docker-compose run -e VAR=value`)
+2. Shell environment variables
+3. **`.env` file** (takes precedence over docker-compose.yml)
+4. `environment` section in docker-compose.yml
+5. Dockerfile ENV statements
 
 ### Using Docker directly
 

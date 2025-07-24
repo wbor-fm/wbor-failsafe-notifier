@@ -26,6 +26,10 @@ class HealthCheckMonitor:
             "RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"
         )
         self.queue_name = os.getenv("HEALTH_CHECK_QUEUE", "health_checks")
+        self.exchange_name = os.getenv("RABBITMQ_EXCHANGE_NAME", "wbor_failsafe_events")
+        self.routing_key = os.getenv(
+            "RABBITMQ_HEALTHCHECK_ROUTING_KEY", "health.failsafe-status"
+        )
         self.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
         self.check_interval = int(
             os.getenv("CHECK_INTERVAL_SECONDS", "300")
@@ -45,14 +49,35 @@ class HealthCheckMonitor:
             raise ValueError(msg)
 
     def connect_rabbitmq(self) -> None:
-        """Connect to RabbitMQ and declare the health check queue."""
+        """Connect to RabbitMQ and declare the exchange, queue, and binding."""
         try:
             self.connection = pika.BlockingConnection(
                 pika.URLParameters(self.rabbitmq_url)
             )
             self.channel = self.connection.channel()
+
+            # Declare the exchange
+            self.channel.exchange_declare(
+                exchange=self.exchange_name, exchange_type="topic", durable=True
+            )
+
+            # Declare the queue
             self.channel.queue_declare(queue=self.queue_name, durable=True)
-            logger.info("Connected to RabbitMQ")
+
+            # Bind the queue to the exchange with the routing key
+            self.channel.queue_bind(
+                exchange=self.exchange_name,
+                queue=self.queue_name,
+                routing_key=self.routing_key,
+            )
+
+            logger.info(
+                "Connected to RabbitMQ - queue '%s' bound to exchange '%s' with routing"
+                " key '%s'",
+                self.queue_name,
+                self.exchange_name,
+                self.routing_key,
+            )
         except Exception:
             logger.exception("Failed to connect to RabbitMQ")
             raise
