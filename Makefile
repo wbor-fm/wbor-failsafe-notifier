@@ -58,6 +58,10 @@ service-start: ## Start systemd service (requires sudo)
 service-stop: ## Stop systemd service (requires sudo)
 	sudo systemctl stop wbor-failsafe-notifier.service
 
+service-update: ## Update systemd service (requires sudo)
+	sudo systemctl daemon-reload
+	sudo systemctl restart wbor-failsafe-notifier.service
+
 service-restart: ## Restart systemd service (requires sudo)
 	sudo systemctl restart wbor-failsafe-notifier.service
 
