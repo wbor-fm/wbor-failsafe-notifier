@@ -13,7 +13,7 @@ from typing import NoReturn
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
-    from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+    from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef, import-not-found]
 
 import pika
 import requests
