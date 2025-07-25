@@ -192,8 +192,8 @@ class HealthCheckMonitor:
                 )
                 self.send_discord_alert(alert_message)
 
-                # Reset to avoid spam alerts
-                self.last_health_check = current_time
+                # Set to None to prevent alert spam until a new health check arrives.
+                self.last_health_check = None
 
     def _ensure_channel(self) -> None:
         """Ensure RabbitMQ channel is established.
