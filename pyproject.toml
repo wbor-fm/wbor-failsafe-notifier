@@ -36,6 +36,12 @@ dependencies = [
     "pika",
 ]
 
+[tool.setuptools]
+packages = ["utils"]
+
+[tool.setuptools.package-dir]
+utils = "utils"
+
 [project.optional-dependencies]
 dev = [
     "ruff>=0.12.4",
