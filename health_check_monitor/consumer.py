@@ -1,4 +1,4 @@
-# type ignores since VSCode struggles to see pika types correctly
+"""Health check monitor application for monitoring RabbitMQ health check messages."""
 
 from __future__ import annotations
 
@@ -10,22 +10,17 @@ import threading
 import time
 from typing import NoReturn
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef, import-not-found]
-
 import pika
 import requests
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s UTC - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logging.Formatter.converter = time.gmtime
+
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
 
 
 class HealthCheckMonitor:
@@ -48,8 +43,6 @@ class HealthCheckMonitor:
         self.timeout_threshold = int(
             os.getenv("TIMEOUT_THRESHOLD_SECONDS", "600")
         )  # 10 minutes default
-        self.timezone_str = os.getenv("TIMEZONE", "America/New_York")
-        self.timezone = ZoneInfo(self.timezone_str)
 
         self.last_health_check: datetime | None = None
         self.connection: pika.BlockingConnection | None = None
@@ -61,9 +54,7 @@ class HealthCheckMonitor:
             msg = "Discord webhook URL not configured"
             raise ValueError(msg)
 
-        logger.info(
-            "Health check monitor configured with timezone: %s", self.timezone_str
-        )
+        logger.info("Health check monitor configured (UTC)")
 
     def connect_rabbitmq(self) -> None:
         """Connect to RabbitMQ and declare the exchange, queue, and binding."""
@@ -143,12 +134,9 @@ class HealthCheckMonitor:
 
             message = json.loads(body.decode("utf-8"))
             self.last_health_check = datetime.now(timezone.utc)
-            # Log with local timezone for readability
-            local_time = self.last_health_check.astimezone(self.timezone)
             logger.info(
-                "Received health check at %s (%s): %s",
-                local_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                self.timezone_str,
+                "Received health check at %s: %s",
+                self.last_health_check.strftime("%Y-%m-%d %H:%M:%S UTC"),
                 message,
             )
             ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -174,9 +162,9 @@ class HealthCheckMonitor:
 
             if time_since_last_check.total_seconds() > self.timeout_threshold:
                 seconds_since = int(time_since_last_check.total_seconds())
-                # Convert UTC timestamp to local timezone for display
-                last_check_local = self.last_health_check.astimezone(self.timezone)
-                last_check_str = last_check_local.strftime("%Y-%m-%d %H:%M:%S %Z")
+                last_check_str = self.last_health_check.strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
                 alert_message = (
                     "🚨 **WBOR Failsafe Notifier Health Check Alert** 🚨\n"
                     "No health check received from `wbor-failsafe-notifier` for "
