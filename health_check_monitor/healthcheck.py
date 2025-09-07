@@ -1,5 +1,9 @@
 """Health check script for the wbor-failsafe-notifier health check monitor container.
 
+NOT the actual health check monitor code itself.
+
+(Yes, this is meta)
+
 Verifies that the container can connect to RabbitMQ and access the required
 exchange and queue for health check monitoring.
 """
