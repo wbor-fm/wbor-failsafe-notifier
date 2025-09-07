@@ -16,8 +16,32 @@ services:
       - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-300}
       - TIMEOUT_THRESHOLD_SECONDS=${TIMEOUT_THRESHOLD_SECONDS:-600}
       - TIMEZONE=${TIMEZONE:-America/New_York}
+    depends_on:
+      - rabbitmq
     networks:
       - failsafe-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "30"
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - failsafe-network
+
+volumes:
+  rabbitmq_data:
 
 networks:
   failsafe-network:
