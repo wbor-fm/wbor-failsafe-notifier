@@ -17,5 +17,4 @@ requests>=2.32
 typing_extensions>=4.12
 urllib3>=2.3
 colorlog>=6.9
-pytz>=2025.2
 pika>=1.3

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 import os
 
 from dotenv import dotenv_values
-import pytz
 
 # Discord embed colors (decimal per API requirements)
 DISCORD_EMBED_ERROR_COLOR = 16711680  # Red
@@ -35,7 +34,6 @@ class Config:
     backup_input: str
     primary_source: str
     backup_source: str
-    timezone: str
     dry_run: bool
 
     # Discord
@@ -67,9 +65,6 @@ class Config:
     # Spinitron
     spinitron_api_base_url: str | None
 
-    # Timezone object
-    configured_timezone: pytz.BaseTzInfo
-
 
 def load_config() -> Config:
     """Load configuration from environment variables and `.env` file."""
@@ -93,14 +88,6 @@ def load_config() -> Config:
             ".env file or environment!"
         )
         raise ValueError(cfg_err_msg)
-
-    # Validate timezone and create timezone object, default to America/New_York
-    timezone_name = config.get("TIMEZONE") or "America/New_York"
-    try:
-        configured_timezone = pytz.timezone(timezone_name)
-    except pytz.UnknownTimeZoneError:
-        configured_timezone = pytz.timezone("America/New_York")
-        timezone_name = "America/New_York"
 
     pin_assignment = config["PIN_ASSIGNMENT"]
     if not pin_assignment:
@@ -146,7 +133,6 @@ def load_config() -> Config:
         backup_input=backup_input,
         primary_source=primary_source,
         backup_source=backup_source,
-        timezone=timezone_name,
         dry_run=dry_run,
         # Discord
         discord_webhook_url=config.get("DISCORD_WEBHOOK_URL"),
@@ -175,6 +161,4 @@ def load_config() -> Config:
         healthcheck_exchange=healthcheck_exchange,
         commands_exchange=commands_exchange,
         rabbitmq_override_queue=config.get("RABBITMQ_OVERRIDE_QUEUE") or "commands",
-        # Timezone
-        configured_timezone=configured_timezone,
     )

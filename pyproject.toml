@@ -32,7 +32,6 @@ dependencies = [
     "typing_extensions>=4.12",
     "urllib3>=2.3",
     "colorlog>=6.9",
-    "pytz>=2025.2",
     "pika>=1.3",
 ]
 
@@ -49,7 +48,6 @@ utils = "utils"
 dev-dependencies = [
     "ruff>=0.12",
     "mypy>=1.17",
-    "types-pytz",
     "types-requests",
 ]
 

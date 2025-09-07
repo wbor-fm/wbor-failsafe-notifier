@@ -58,9 +58,8 @@ else:
     board = MockBoard()
     digitalio = MockDigitalIO()
 
-# Initialize logging with configured timezone
 logging.root.handlers = []
-logger = configure_logging(timezone_name=app_config.timezone)
+logger = configure_logging()
 
 # Log warning message if .env file wasn't found
 if not dotenv_values(".env"):
@@ -74,7 +73,6 @@ PIN_NAME = app_config.pin_assignment
 PRIMARY_SOURCE = app_config.primary_source
 BACKUP_SOURCE = app_config.backup_source
 DRY_RUN = app_config.dry_run
-configured_timezone = app_config.configured_timezone
 
 # Initialize hardware pin (skip in dry run mode)
 if not DRY_RUN:
@@ -611,7 +609,6 @@ def send_discord_source_change(
 
     fields = []
     thumb_url = None
-    user_tz = configured_timezone
 
     if playlist_info:
         thumb_url = playlist_info.get("image")
@@ -625,10 +622,7 @@ def send_discord_source_change(
                 if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
                     utc_dt = utc_dt.replace(tzinfo=timezone.utc)  # Make it UTC aware
 
-                local_dt = utc_dt.astimezone(user_tz)  # Convert to configured timezone
-                start_time_str = local_dt.strftime(
-                    "%Y-%m-%d %I:%M %p %Z"
-                )  # %Z will add timezone abbreviation
+                start_time_str = utc_dt.strftime("%Y-%m-%d %H:%M UTC")
             except ValueError as e:
                 logger.warning(
                     "Could not parse start time from Spinitron: %s - %s",
@@ -650,10 +644,7 @@ def send_discord_source_change(
                 if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
                     utc_dt = utc_dt.replace(tzinfo=timezone.utc)
 
-                local_dt = utc_dt.astimezone(user_tz)
-                end_time_str = local_dt.strftime(
-                    "%Y-%m-%d %I:%M %p %Z"
-                )  # %Z will add timezone abbreviation
+                end_time_str = utc_dt.strftime("%Y-%m-%d %H:%M UTC")
             except ValueError as e:
                 logger.warning(
                     "Could not parse end time from Spinitron: %s - %s",

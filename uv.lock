@@ -300,15 +300,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pytz"
-version = "2025.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f8/bf/abbd3cdfb8fbc7fb3d4d38d320f2441b1e7cbe29be4f23797b4a2b5d8aac/pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3", size = 320884, upload-time = "2025-03-25T02:25:00.538Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/c4/34e93fe5f5429d7570ec1fa436f1986fb1f00c3e0f43a589fe2bbcd22c3f/pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00", size = 509225, upload-time = "2025-03-25T02:24:58.468Z" },
-]
-
-[[package]]
 name = "pyusb"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -412,15 +403,6 @@ wheels = [
 ]
 
 [[package]]
-name = "types-pytz"
-version = "2025.2.0.20250516"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bd/72/b0e711fd90409f5a76c75349055d3eb19992c110f0d2d6aabbd6cfbc14bf/types_pytz-2025.2.0.20250516.tar.gz", hash = "sha256:e1216306f8c0d5da6dafd6492e72eb080c9a166171fa80dd7a1990fd8be7a7b3", size = 10940, upload-time = "2025-05-16T03:07:01.91Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/ba/e205cd11c1c7183b23c97e4bcd1de7bc0633e2e867601c32ecfc6ad42675/types_pytz-2025.2.0.20250516-py3-none-any.whl", hash = "sha256:e0e0c8a57e2791c19f718ed99ab2ba623856b11620cb6b637e5f62ce285a7451", size = 10136, upload-time = "2025-05-16T03:07:01.075Z" },
-]
-
-[[package]]
 name = "types-requests"
 version = "2.32.4.20250611"
 source = { registry = "https://pypi.org/simple" }
@@ -471,7 +453,6 @@ dependencies = [
     { name = "pyftdi" },
     { name = "pyserial" },
     { name = "python-dotenv" },
-    { name = "pytz" },
     { name = "pyusb" },
     { name = "requests" },
     { name = "typing-extensions" },
@@ -482,7 +463,6 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "ruff" },
-    { name = "types-pytz" },
     { name = "types-requests" },
 ]
 
@@ -504,7 +484,6 @@ requires-dist = [
     { name = "pyftdi", specifier = ">=0.56.0" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "pytz", specifier = ">=2025.2" },
     { name = "pyusb", specifier = ">=1.3" },
     { name = "requests", specifier = ">=2.32" },
     { name = "typing-extensions", specifier = ">=4.12" },
@@ -515,6 +494,5 @@ requires-dist = [
 dev = [
     { name = "mypy", specifier = ">=1.17" },
     { name = "ruff", specifier = ">=0.12" },
-    { name = "types-pytz" },
     { name = "types-requests" },
 ]
