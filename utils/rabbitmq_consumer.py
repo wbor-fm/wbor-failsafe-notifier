@@ -17,6 +17,9 @@ import pika
 from pika.exceptions import AMQPChannelError, AMQPConnectionError
 import pika.spec
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 class RabbitMQConsumer:
     """RabbitMQ consumer class.
