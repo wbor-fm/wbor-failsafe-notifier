@@ -4,7 +4,10 @@ NETWORK_NAME = wbor-network
 HOST_DIR = $(PWD)
 
 # Default to Docker, allow override with DOCKER_TOOL=podman
+# (either hardcode here or export in shell before running `make`)
 DOCKER_TOOL ?= docker
+
+.PHONY: default q exec logsf build start run stop clean health
 
 default: clean build run logsf
 
@@ -23,7 +26,6 @@ build:
 start: run
 
 run: stop
-	mkdir -p ${HOST_DIR}/logs
 	$(DOCKER_TOOL) run -d \
 		--restart unless-stopped \
 		--network $(NETWORK_NAME) \
@@ -32,7 +34,6 @@ run: stop
 		--log-opt max-size=30m \
 		--log-opt max-file=30 \
 		--env-file .env \
-		-v ${HOST_DIR}/logs:/app/logs \
 		$(IMAGE_NAME)
 
 stop:
@@ -57,5 +58,3 @@ clean: stop
 
 health:
 	$(DOCKER_TOOL) inspect --format='{{.State.Health.Status}}' $(CONTAINER_NAME)
-
-.PHONY: default q exec logsf build start run stop clean health
