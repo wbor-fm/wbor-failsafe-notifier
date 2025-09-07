@@ -116,7 +116,7 @@ class RabbitMQConsumer:
                 self.queue_name,
             )
 
-        except AMQPConnectionError:
+        except (AMQPConnectionError, OSError):
             self.logger.exception("Failed to connect to RabbitMQ")
             self._connection = None
             self._channel = None
@@ -223,10 +223,10 @@ class RabbitMQConsumer:
                         self.logger.warning("Error processing data events: %s", e)
                         break
 
-            except (AMQPConnectionError, AMQPChannelError):
+            except (AMQPConnectionError, AMQPChannelError, OSError):
                 self.logger.exception("Connection/Channel error during consumption")
                 self._consuming = False
-                time.sleep(5)  # Wait before retry
+                time.sleep(5)
             except Exception:
                 self.logger.exception("Unexpected error in consume loop")
                 self._consuming = False
