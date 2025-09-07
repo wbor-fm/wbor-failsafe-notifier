@@ -4,37 +4,40 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wbor-failsafe-notifier"
-version = "1.4.0"
+version = "0.1.0"
 description = "Monitors digital input and sends notifications when failsafe switches sources"
 authors = [
     {name = "Mason Daugherty", email = "github@mdrxy.com"}
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "Adafruit-Blinka==8.56.0",
-    "adafruit-circuitpython-busdevice==5.2.11",
-    "adafruit-circuitpython-connectionmanager==3.1.3",
-    "adafruit-circuitpython-requests==4.1.10",
-    "adafruit-circuitpython-typing==1.11.2",
-    "Adafruit-PlatformDetect==3.77.0",
-    "Adafruit-PureIO==1.1.11",
-    "binho-host-adapter==0.1.6",
-    "certifi==2025.1.31",
-    "charset-normalizer==3.4.1",
-    "idna==3.10",
-    "pyftdi==0.56.0",
-    "pyserial==3.5",
-    "python-dotenv==1.0.1",
-    "pyusb==1.3.1",
-    "requests==2.32.3",
-    "typing_extensions==4.12.2",
-    "urllib3==2.3.0",
-    "colorlog",
-    "pytz",
-    "pika",
+    "Adafruit-Blinka>=8.56",
+    "adafruit-circuitpython-busdevice>=5.2",
+    "adafruit-circuitpython-connectionmanager>=3.1",
+    "adafruit-circuitpython-requests>=4.1",
+    "adafruit-circuitpython-typing>=1.11",
+    "Adafruit-PlatformDetect>=3.77",
+    "Adafruit-PureIO>=1.1",
+    "binho-host-adapter>=0.1",
+    "certifi>=2025.1",
+    "charset-normalizer>=3.4",
+    "idna>=3.10",
+    "pyftdi>=0.56.0",
+    "pyserial>=3.5",
+    "python-dotenv>=1.0",
+    "pyusb>=1.3",
+    "requests>=2.32",
+    "typing_extensions>=4.12",
+    "urllib3>=2.3",
+    "colorlog>=6.9",
+    "pytz>=2025.2",
+    "pika>=1.3",
 ]
+
+[project.urls]
+repository = "https://github.com/wbor-fm/wbor-failsafe-notifier"
 
 [tool.setuptools]
 packages = ["utils"]
@@ -42,24 +45,15 @@ packages = ["utils"]
 [tool.setuptools.package-dir]
 utils = "utils"
 
-[project.optional-dependencies]
-dev = [
-    "ruff>=0.12.4",
-    "mypy>=1.0.0",
-    "types-pytz",
-    "types-requests",
-]
-
 [tool.uv]
 dev-dependencies = [
-    "ruff>=0.12.4",
-    "mypy>=1.0.0",
+    "ruff>=0.12",
+    "mypy>=1.17",
     "types-pytz",
     "types-requests",
 ]
 
 [tool.ruff]
-# Exclude specific directories and files
 exclude = [
     ".bzr",
     ".direnv", 
@@ -84,17 +78,12 @@ exclude = [
     "venv",
 ]
 
-# Set line length to match common Python conventions
 line-length = 88
 indent-width = 4
-
-# Python 3.9+
-target-version = "py39"
 
 [tool.ruff.lint]
 select = ["ALL"]
 
-# Disable specific rules that might be too strict or not applicable
 ignore = [
     # Rules that conflict with formatter
     "COM812",   # missing-trailing-comma
@@ -122,7 +111,6 @@ ignore = [
     "PERF203",  # Try-except within a loop (necessary for robust network operations)
 ]
 
-# Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 unfixable = []
 
@@ -130,7 +118,6 @@ unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.pydocstyle]
-# Use Google docstring convention
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
@@ -147,17 +134,12 @@ convention = "google"
 ]
 
 [tool.ruff.format]
-# Use double quotes for strings
+line-ending = "auto"
 quote-style = "double"
-
-# Indent with spaces, rather than tabs
 indent-style = "space"
 
 # Respect magic trailing commas
 skip-magic-trailing-comma = false
-
-# Automatically detect the appropriate line ending
-line-ending = "auto"
 
 [tool.ruff.lint.isort]
 # Force imports to be sorted
@@ -171,7 +153,6 @@ inline-quotes = "double"
 multiline-quotes = "double"
 
 [tool.mypy]
-python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -179,7 +160,6 @@ disallow_incomplete_defs = false
 check_untyped_defs = true
 disallow_subclassing_any = false
 
-# Ignore missing imports for hardware libraries that don't have stubs
 [[tool.mypy.overrides]]
 module = [
     "board",
