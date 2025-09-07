@@ -76,13 +76,14 @@ class RabbitMQPublisher:
                 self.exchange_name,
                 self.exchange_type,
             )
-        except AMQPConnectionError:
-            self.logger.exception("Failed to connect to RabbitMQ")
-            self._connection = None
-            self._channel = None
-            raise
-        except AMQPError:  # Catch other AMQP-related errors during setup
-            self.logger.exception("An AMQP error occurred during RabbitMQ connection")
+        except (
+            AMQPConnectionError,
+            AMQPError,
+            OSError,
+        ) as e:
+            self.logger.exception(
+                "Failed to connect to RabbitMQ (%s)", type(e).__name__
+            )
             self._connection = None
             self._channel = None
             raise
@@ -129,11 +130,11 @@ class RabbitMQPublisher:
         """
         try:
             self._ensure_connected()
-        except (AMQPConnectionError, AMQPChannelError):
+        except (AMQPConnectionError, AMQPChannelError, OSError):
             self.logger.exception(
                 "Failed to ensure RabbitMQ connection before publishing"
             )
-            return False  # Cannot publish if connection cannot be ensured
+            return False
 
         if not self._channel:
             self.logger.error("Cannot publish, RabbitMQ channel is not available.")
@@ -177,9 +178,9 @@ class RabbitMQPublisher:
                 )
                 # Unroutable messages, don't retry without a configuration change
                 return False
-            except (AMQPConnectionError, AMQPChannelError):
+            except (AMQPConnectionError, AMQPChannelError, OSError):
                 self.logger.exception(
-                    "Connection/Channel error during publish (attempt %d/%d)",
+                    "Connection error during publish (attempt %d/%d)",
                     attempt + 1,
                     retry_attempts,
                 )
