@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import pika
 from pika.exceptions import AMQPChannelError, AMQPConnectionError
@@ -243,21 +243,13 @@ class RabbitMQConsumer:
         Returns:
         - bool: True if consumption started successfully, False otherwise
         """
+        # Start the thread even if we currently can't connect; the loop will retry.
         if self._consuming:
             self.logger.warning("Consumer is already running")
             return True
-
-        try:
-            self._ensure_connected()
-        except Exception:
-            self.logger.exception("Failed to connect before starting consumer")
-            return False
-
         self._stop_consuming.clear()
         self._consumer_thread = threading.Thread(target=self._consume_loop, daemon=True)
         self._consumer_thread.start()
-
-        # Wait a moment to see if the thread starts successfully
         time.sleep(0.5)
         return self._consumer_thread.is_alive()
 
