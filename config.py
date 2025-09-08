@@ -138,7 +138,7 @@ def load_config() -> Config:
         discord_webhook_url=config.get("DISCORD_WEBHOOK_URL"),
         author_name=config.get("AUTHOR_NAME") or "wbor-failsafe-notifier",
         author_url=config.get("AUTHOR_URL")
-        or "https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier",
+        or "https://github.com/wbor-fm/wbor-failsafe-notifier",
         author_icon_url=config.get("AUTHOR_ICON_URL"),
         # Spinitron
         spinitron_api_base_url=config.get("SPINITRON_API_BASE_URL"),

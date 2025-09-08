@@ -706,7 +706,7 @@ def send_discord_source_change(
     ):  # Check if thumbnail is not already set by base
         embed["thumbnail"] = {"url": thumb_url}
 
-    embed["footer"] = {"text": "Powered by WBOR-91-1-FM/wbor-failsafe-notifier"}
+    embed["footer"] = {"text": "Powered by wbor-fm/wbor-failsafe-notifier"}
 
     send_discord_notification(payload)
 
@@ -836,7 +836,7 @@ def resolve_and_notify_dj(
                 "Do not reply to this email as it is unattended. Contact management at "
                 "wbor@bowdoin.edu or other channels.\n\nThanks for your help!"
                 "\n-mgmt\n\n"
-                "Automated message sent by WBOR-91-1-FM/wbor-failsafe-notifier"
+                "Automated message sent by wbor-fm/wbor-failsafe-notifier"
             )
             send_email(
                 subject="ATTN: WBOR Failsafe Activated - Action Required During "
