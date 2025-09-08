@@ -149,6 +149,9 @@ class OverrideManager:
         self.override_logged = False
         self.original_source_before_override: str | None = None
         self.last_healthcheck_retry_time: datetime | None = None
+        self.last_consumer_retry_time: datetime | None = None
+        self.publisher_reinit_backoff_seconds = 300  # 5 min
+        self.consumer_retry_backoff_seconds = 300  # 5 min
 
 
 # Global state manager for temporary override functionality
@@ -305,10 +308,33 @@ def send_health_check(publishers: dict[str, RabbitMQPublisher | None]) -> None:
     recovery if RabbitMQ comes back online.
     """
     healthcheck_publisher = publishers.get("healthcheck")
-    if not healthcheck_publisher:
-        return
 
     current_time = datetime.now(timezone.utc)
+
+    # Try to (re)initialize the healthcheck publisher if missing
+    if (
+        not healthcheck_publisher
+        and app_config.rabbitmq_amqp_url
+        and (
+            override_manager.last_healthcheck_retry_time is None
+            or current_time - override_manager.last_healthcheck_retry_time
+            >= timedelta(seconds=override_manager.publisher_reinit_backoff_seconds)
+        )
+    ):
+        try:
+            publishers["healthcheck"] = RabbitMQPublisher(
+                amqp_url=app_config.rabbitmq_amqp_url,
+                exchange_name=app_config.healthcheck_exchange.name,
+            )
+            healthcheck_publisher = publishers["healthcheck"]
+            logger.info("Reinitialized RabbitMQ healthcheck publisher.")
+        except Exception:
+            logger.exception("Failed to (re)initialize healthcheck publisher")
+        finally:
+            override_manager.last_healthcheck_retry_time = current_time
+
+    if not healthcheck_publisher:
+        return
 
     # If we've exceeded max failures, only retry every hour
     if (
@@ -615,14 +641,14 @@ def send_discord_source_change(
         start_time_str = "N/A"
         if playlist_info.get("start"):
             try:
-                # Spinitron 'start' and 'end' are typically ISO 8601 UTC strings
-                utc_dt = datetime.fromisoformat(playlist_info["start"])
-
-                # If fromisoformat results in a naive datetime (no tzinfo), assume UTC
-                if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
-                    utc_dt = utc_dt.replace(tzinfo=timezone.utc)  # Make it UTC aware
-
-                start_time_str = utc_dt.strftime("%Y-%m-%d %H:%M UTC")
+                # Spinitron 'start' times are assumed to be UTC
+                dt = datetime.fromisoformat(
+                    playlist_info["start"].replace("Z", "+00:00")
+                )
+                # Always treat as UTC (remove timezone info if present)
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                start_time_str = dt.strftime("%Y-%m-%d %H:%M UTC")
             except ValueError as e:
                 logger.warning(
                     "Could not parse start time from Spinitron: %s - %s",
@@ -631,20 +657,21 @@ def send_discord_source_change(
                 )
             except Exception:
                 logger.exception(
-                    "Error converting start time %s to %s",
+                    "Error converting start time %s",
                     playlist_info["start"],
-                    app_config.timezone,
                 )
 
         end_time_str = "N/A"
         if playlist_info.get("end"):
             try:
-                utc_dt = datetime.fromisoformat(playlist_info["end"])
-
-                if utc_dt.tzinfo is None or utc_dt.tzinfo.utcoffset(utc_dt) is None:
-                    utc_dt = utc_dt.replace(tzinfo=timezone.utc)
-
-                end_time_str = utc_dt.strftime("%Y-%m-%d %H:%M UTC")
+                # Spinitron 'end' times are assumed to be UTC
+                dt = datetime.fromisoformat(
+                    playlist_info["end"].replace("Z", "+00:00")
+                )
+                # Always treat as UTC (remove timezone info if present)
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                end_time_str = dt.strftime("%Y-%m-%d %H:%M UTC")
             except ValueError as e:
                 logger.warning(
                     "Could not parse end time from Spinitron: %s - %s",
@@ -653,9 +680,8 @@ def send_discord_source_change(
                 )
             except Exception:
                 logger.exception(
-                    "Error converting end time %s to %s",
+                    "Error converting end time %s",
                     playlist_info["end"],
-                    app_config.timezone,
                 )
         fields.append(
             {
@@ -972,6 +998,17 @@ def send_all_source_change_notifications(
 
     # Send RabbitMQ notification
     notifications_publisher = local_rabbitmq_publishers.get("notifications")
+    if not notifications_publisher and app_config.rabbitmq_amqp_url:
+        try:
+            local_rabbitmq_publishers["notifications"] = RabbitMQPublisher(
+                amqp_url=app_config.rabbitmq_amqp_url,
+                exchange_name=app_config.notifications_exchange.name,
+            )
+            notifications_publisher = local_rabbitmq_publishers["notifications"]
+            logger.info("Reinitialized RabbitMQ notifications publisher.")
+        except Exception:
+            logger.exception("Failed to (re)initialize notifications publisher")
+
     if notifications_publisher:
         rabbitmq_payload = {
             "source_application": "wbor-failsafe-notifier",
@@ -1033,6 +1070,34 @@ def main_loop(
             override_just_expired = check_override_expiry()
 
             send_health_check(local_rabbitmq_publishers)
+
+            # If we don't have a consumer (e.g. due to errors), try to
+            # initialize & start it every 5 minutes.
+            now = datetime.now(timezone.utc)
+            if (
+                local_rabbitmq_consumer is None
+                and app_config.rabbitmq_amqp_url
+                and (
+                    override_manager.last_consumer_retry_time is None
+                    or now - override_manager.last_consumer_retry_time
+                    >= timedelta(
+                        seconds=override_manager.consumer_retry_backoff_seconds
+                    )
+                )
+            ):
+                try:
+                    local_rabbitmq_consumer = initialize_rabbitmq_consumer()
+                    if (
+                        local_rabbitmq_consumer
+                        and local_rabbitmq_consumer.start_consuming()
+                    ):
+                        logger.info("RabbitMQ consumer started on retry")
+                    else:
+                        logger.error("Consumer init retry failed")
+                except Exception:
+                    logger.exception("Error retrying consumer initialization")
+                finally:
+                    override_manager.last_consumer_retry_time = now
 
             current_pin_state = DIGITAL_PIN.value
             current_source = PRIMARY_SOURCE if current_pin_state else BACKUP_SOURCE
