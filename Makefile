@@ -48,7 +48,7 @@ clean: ## Clean up temporary files and caches
 generate-service: ## Generate systemd service file with current user and paths
 	./generate_service.sh
 
-service-install: generate-service ## Generate and install systemd service (requires sudo)
+service-install: ## Generate and install systemd service (requires sudo)
 	sudo cp wbor-failsafe-notifier.service /etc/systemd/system/
 	sudo systemctl daemon-reload
 
