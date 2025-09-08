@@ -147,6 +147,24 @@ See `.env.sample` for complete configuration details and examples.
    make service-logs
    ```
 
+### Updating Service Configuration
+
+If changes are to the service file or environment variables, follow these steps:
+
+```bash
+# 1. Generate updated service file
+make generate-service
+
+# 2. Stop current service
+make service-stop
+
+# 3. Reinstall with fixes
+make service-install
+
+# 4. Restart the service
+make service-start
+```
+
 ## Development
 
 ### Development Setup
