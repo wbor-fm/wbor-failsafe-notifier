@@ -23,6 +23,7 @@ cat > "$SERVICE_FILE" << EOF
 Description=Failsafe Gadget Notifier Service
 Wants=network-online.target
 After=network-online.target nss-lookup.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -35,7 +36,6 @@ ExecStartPre=/bin/sh -c 'if [ -n "\$RABBITMQ_HOST" ]; then until getent hosts "\
 ExecStart=$CURRENT_DIR/.venv/bin/python $CURRENT_DIR/failsafe.py
 Restart=always
 RestartSec=300s
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
