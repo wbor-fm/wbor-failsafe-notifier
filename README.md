@@ -2,29 +2,37 @@
 
 **TL;DR: sends notifications via Discord, GroupMe, Email, and optionally RabbitMQ when the backup audio source becomes active.**
 
-WBOR uses Angry Audio's [Failsafe Gadget](https://angryaudio.com/failsafegadget/) to automatically switch to a backup audio source if our main mixing board/audio console stops emitting audio. If the audio level drops below -24db and remains there for 60 seconds, the unit will switch to the backup (B) source. In our case, this is a streaming computer that plays a loop of music. As soon as the audio console (our "A" source) resumes sending audio, the Failsafe Gadget will switch back to it.
+WBOR uses Angry Audio's [Failsafe Gadget](https://angryaudio.com/failsafegadget/) to automatically switch to a backup audio source if our main mixing board/audio console stops emitting audio.
 
-Ideally, a member of station management should be notified when source B becomes active, as it indicates a failure with the audio console (since it stopped producing a signal). This is where some handy scripting comes in!
+<details>
+<summary>Details</summary>
 
-On the rear of the Failsafe Gadget is a DB9 logic port that can be used to monitor which source is currently active (amongst other things). Using a few jumper wires and an ARM single-board computer (e.g. a Raspberry Pi), we can read the logic port status in Python. In our case, we want to send a message to some destination (such as: a Discord channel, GroupMe group, or RabbitMQ exchange) when the B source becomes active so that management can investigate the issue in person (and in a timely manner).
+If the audio level drops below -24db and remains there for 60 seconds, the unit will switch to the backup (B) source. In our case, this is a streaming computer that plays a loop of music. As soon as the audio console (our `A` source) resumes sending audio, the Failsafe Gadget will switch back to it.
+
+</details>
+
+Ideally, a member of station management should be notified when source `B` becomes active, as it indicates a failure with the audio console (since it stopped producing a signal). This is where some handy scripting comes in!
+
+On the rear of the Failsafe Gadget is a [DB9 logic port](https://www.theengineeringknowledge.com/db9-connector/) that can be used to monitor which audio source is currently active (amongst other things). Using a few jumper wires and an ARM single-board computer (e.g. a Raspberry Pi), we read the logic port status in Python. In our case, we want to send a message to some destination (such as: a Discord channel, GroupMe group, or RabbitMQ exchange) when the `B` source becomes active so that management can investigate the issue.
 
 ![Failsafe Gadget DB9 Pinout](/images/aa-pinout.png)
 
-If you don't have direct access to GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our board is inside a case. Consequently, our code and instructions will be written with that in mind.
+If you don't have direct access to GPIO pins, you can also use a [FT232H USB to JTAG serial converter](https://amazon.com/dp/B09XTF7C1P), like we did, since our board (a Raspberry Pi) is inside a plastic case. Consequently, our code and instructions will be written with that in mind.
 
 ## Notification Options
 
 The script is written to suit **our needs**, but you can easily modify it to suit your own. By default, it will follow the following logic:
 
-* If the backup source (B) becomes active, we query our [Spinitron API proxy](https://github.com/WBOR-91-1-FM/spinitron-proxy/) to get information about the current playlist and on-air DJ. If this information is available, and we're not currently broadcasting an automation (unattended) playlist, we bundle up the info into a Discord embed that is sent to our `#tech-ops` channel so that station technical staff are made aware of the issue.
-  * If the current playlist is NOT automated and we are unable to fetch the email address of the current DJ, we fall back to sending a message to **ALL DJs** in the DJ-wide GroupMe group. This is done to ensure that *someone* is made aware of the issue, even if the DJ's email address is not available.
+* If the backup source (`B`) becomes active, we query our [Spinitron API proxy](https://github.com/wbor-fm/spinitron-proxy/) to get information about the current playlist and on-air DJ. If this information is available, and we're not currently broadcasting an automation (unattended) playlist, we bundle up the info into a Discord embed that is sent to our technical operations channel so that station technical staff are made aware of the issue.
+  * If the current playlist is NOT automated and we're unable to fetch the email address of the current DJ, we fall back to sending a message to **ALL DJs** in the DJ-wide GroupMe group. This is done to ensure that *someone* is made aware of the issue, even if the DJ's email address is not available.
 * Simultaneously, we send a message to the GroupMe group with the same information to the management-wide GroupMe group (that includes non-technical staff members).
-* If an email address was found, we send the DJ an email letting them know that the backup source is active and they should check board's status. This is done using the [smtplib](https://docs.python.org/3/library/smtplib.html) library in Python. The email is sent from the address specified in the `.env` file.
+* If an email address *was* found, we send the DJ an email letting them know that the backup source is active and they should check board's status.
   * Any time an email is sent, we notify the tech-ops channel in Discord letting them know that an email was sent to the DJ.
 * **Optionally**, events can be published to RabbitMQ message queues using three separate exchanges:
   * **notifications** - source change events for other consumers to monitor operational status
   * **healthcheck** - periodic health pings for monitoring service availability  
-  * **commands** - override commands to temporarily disable failsafe processing
+  * **commands** - override commands to temporarily **disable** failsafe processing
+    * This is useful if you need to take the board offline for maintenance or testing without sending out notifications. We automatically disable the failsafe processing when performing updates or maintenance that requires taking the audio stream offline.
 
 ## Installation & Setup
 
@@ -39,7 +47,7 @@ The script is written to suit **our needs**, but you can easily modify it to sui
 1. **Clone and setup:**
 
    ```bash
-   git clone https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier.git
+   git clone https://github.com/wbor-fm/wbor-failsafe-notifier.git
    cd wbor-failsafe-notifier
    ```
 
@@ -61,10 +69,6 @@ The script is written to suit **our needs**, but you can easily modify it to sui
 
    ```bash
    cp .env.sample .env
-   nano .env  # Edit configuration (see Configuration section below)
-
-   # or using Makefile
-   make env-copy
    nano .env
    ```
 
@@ -92,22 +96,30 @@ Edit `.env` to configure your setup. Key sections:
 
 **Optional Settings:**
 
-* `TIMEZONE` - Display timezone (default: `America/New_York`)
-* `SPINITRON_API_BASE_URL` - For fetching current DJ/playlist info
+* `SPINITRON_API_BASE_URL` - For fetching current DJ/playlist details to include in notifications
 
 See `.env.sample` for complete configuration details and examples.
 
 ### Production Deployment
 
-1. **Install systemd service:**
-Edit paths in service file if needed
+1. **Generate and install systemd service:**
 
    ```bash
+   # Generate service file with current user and project paths
+   make generate-service
+   
+   # Install the generated service (requires sudo)
+   make service-install
+   ```
+
+   **Or manually:**
+
+   ```bash
+   ./generate_service.sh
+   
+   # Install service
    sudo cp wbor-failsafe-notifier.service /etc/systemd/system/
    sudo systemctl daemon-reload
-
-   # or using the Makefile
-   make service-install
    ```
 
 2. **Enable and start:**
@@ -135,14 +147,6 @@ Edit paths in service file if needed
    make service-logs
    ```
 
-### Updates
-
-```bash
-cd wbor-failsafe-notifier
-git pull origin main
-sudo systemctl restart wbor-failsafe-notifier.service
-```
-
 ## Development
 
 ### Development Setup
@@ -150,7 +154,7 @@ sudo systemctl restart wbor-failsafe-notifier.service
 1. **Clone and install dev dependencies:**
 
    ```bash
-   git clone https://github.com/WBOR-91-1-FM/wbor-failsafe-notifier.git
+   git clone https://github.com/wbor-fm/wbor-failsafe-notifier.git
    cd wbor-failsafe-notifier
    
    # Using uv (recommended)
@@ -165,7 +169,7 @@ sudo systemctl restart wbor-failsafe-notifier.service
 Edit `.env` with your configuration.
 
    ```bash
-   cp .env.sample .env # or make env-copy
+   cp .env.sample .env
    ```
 
 ### Code Quality and Linting
@@ -240,29 +244,6 @@ curl -u username:password -H "Content-Type: application/json" \
 
 Replace `username:password` and `rabbitmq.example.com` with your RabbitMQ credentials and hostname. Be sure to use the correct protocol (HTTP or HTTPS) and port (default is 15672 for RabbitMQ management).
 
-### Project Structure
-
-```txt
-├── .github/
-│   └── workflows/
-│       └── ci.yml            # CI/CD pipeline
-├── failsafe.py               # Main application
-├── config.py                 # Configuration management
-├── utils/
-│   ├── logging.py            # Logging configuration
-│   ├── rabbitmq_publisher.py # RabbitMQ publishing
-│   └── rabbitmq_consumer.py  # RabbitMQ consuming
-├── health_check_monitor/     # Health check monitoring container
-│   ├── Dockerfile            # Container build file
-│   ├── docker-compose.yml    # Multi-service setup
-│   ├── consumer.py           # Health check consumer
-│   └── README.md             # Container-specific docs
-├── pyproject.toml            # Project configuration
-├── Makefile                  # Development commands
-├── uv.lock                   # Dependency lock file
-└── requirements.txt          # Python dependencies (legacy)
-```
-
 ### Health Check Monitor Container
 
 The `health_check_monitor/` directory contains a Docker container that monitors RabbitMQ health check messages and sends Discord alerts when health checks are missed. This is useful for monitoring the main failsafe notifier service to ensure it's running properly.
@@ -279,7 +260,7 @@ The `health_check_monitor/` directory contains a Docker container that monitors 
 ```bash
 cd health_check_monitor
 cp .env.example .env    # Configure environment
-docker-compose up -d    # Start with included RabbitMQ (or configure your own)
+docker-compose up -d
 ```
 
 See `health_check_monitor/README.md` for detailed configuration and deployment options.
