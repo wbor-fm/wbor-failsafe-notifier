@@ -45,7 +45,10 @@ clean: ## Clean up temporary files and caches
 	find . -name ".ruff_cache" -exec rm -rf {} +
 
 # Service management (requires sudo)
-service-install: ## Install systemd service (requires sudo)
+generate-service: ## Generate systemd service file with current user and paths
+	./generate_service.sh
+
+service-install: generate-service ## Generate and install systemd service (requires sudo)
 	sudo cp wbor-failsafe-notifier.service /etc/systemd/system/
 	sudo systemctl daemon-reload
 
@@ -58,9 +61,6 @@ service-start: ## Start systemd service (requires sudo)
 service-stop: ## Stop systemd service (requires sudo)
 	sudo systemctl stop wbor-failsafe-notifier.service
 
-service-update: ## Update systemd service (requires sudo)
-	sudo systemctl daemon-reload
-	sudo systemctl restart wbor-failsafe-notifier.service
 
 service-restart: ## Restart systemd service (requires sudo)
 	sudo systemctl restart wbor-failsafe-notifier.service
@@ -71,13 +71,8 @@ service-status: ## Check systemd service status
 service-logs: ## View systemd service logs
 	sudo journalctl -u wbor-failsafe-notifier.service -f
 
-# Environment setup
-env-copy: ## Copy .env.example to .env
-	cp .env.sample .env
-	@echo "Copied .env.sample to .env - please edit with your configuration"
-
 # Quick development workflow
-dev-setup: install env-copy ## Complete development setup
+dev-setup: install ## Complete development setup
 	@echo "Development setup complete!"
 	@echo "Next steps:"
 	@echo "1. Edit .env with your configuration"
