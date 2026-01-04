@@ -90,9 +90,15 @@ class RabbitMQConsumer:
                 "Attempting to connect to RabbitMQ server at `%s`", log_url
             )
 
-            self._connection = pika.BlockingConnection(
-                pika.URLParameters(self.amqp_url)
-            )
+            # Configure connection parameters with heartbeat to prevent idle disconnects
+            params = pika.URLParameters(self.amqp_url)
+            # Set heartbeat to 300 seconds (5 minutes) to keep connection alive
+            # The server's writer_idle_timeout (default 30s) closes idle connections
+            params.heartbeat = 300
+            # Set blocked connection timeout to handle flow control
+            params.blocked_connection_timeout = 300
+
+            self._connection = pika.BlockingConnection(params)
             self._channel = self._connection.channel()
 
             # Declare exchange if specified
