@@ -16,6 +16,7 @@ from pika.exceptions import (
     AMQPChannelError,
     AMQPConnectionError,
     AMQPError,
+    StreamLostError,
     UnroutableError,
 )
 
@@ -45,28 +46,45 @@ class RabbitMQPublisher:
         self.logger = logging.getLogger(__name__ + ".RabbitMQPublisher")
         self._connect()
 
-    def _connect(self) -> None:
+    def _connect(self, *, is_reconnect: bool = False) -> None:
         """Establish a connection to the RabbitMQ server and declare the exchange.
 
         Called during initialization and whenever a connection is needed.
+
+        Args:
+            is_reconnect: Whether this is a reconnection attempt (adds stabilization).
         """
         if self._connection and self._connection.is_open:
-            return
+            # Verify the channel is also healthy
+            if self._channel and self._channel.is_open:
+                return
+            # Connection open but channel closed - need to recreate channel
+            self.logger.warning(
+                "Connection open but channel closed, recreating channel"
+            )
+
         try:
+            # Clean up any stale connection/channel state first
+            self._cleanup_connection()
+
             # Log only the host part of the URL to avoid credential leak
             url_parts = self.amqp_url.split("@")
             log_url = url_parts[-1] if len(url_parts) > 1 else self.amqp_url
             self.logger.info(
-                "Attempting to connect to RabbitMQ server at `%s`", log_url
+                "%s RabbitMQ server at `%s`",
+                "Reconnecting to" if is_reconnect else "Connecting to",
+                log_url,
             )
 
             # Configure connection parameters with heartbeat to prevent idle disconnects
             params = pika.URLParameters(self.amqp_url)
-            # Set heartbeat to 300 seconds (5 minutes) to keep connection alive
-            # The server's writer_idle_timeout (default 30s) closes idle connections
-            params.heartbeat = 300
+            # Set heartbeat to 60 seconds to detect dead connections faster
+            # This sends heartbeats every 60s and expects response within 60s
+            params.heartbeat = 60
             # Set blocked connection timeout to handle flow control
             params.blocked_connection_timeout = 300
+            # Set socket timeout to prevent hanging on network issues
+            params.socket_timeout = 30
 
             self._connection = pika.BlockingConnection(params)
             self._channel = self._connection.channel()
@@ -76,9 +94,26 @@ class RabbitMQPublisher:
                 durable=True,
             )
             self._channel.confirm_delivery()
+
+            # Process any pending I/O events to ensure channel is fully ready
+            # This helps prevent race conditions after reconnection
+            if self._connection:
+                self._connection.process_data_events(time_limit=0)
+
+            # Add stabilization delay after reconnect to let the channel settle
+            if is_reconnect:
+                stabilization_delay = 1.0  # 1 second
+                self.logger.info(
+                    "Waiting %.1fs for connection to stabilize...", stabilization_delay
+                )
+                time.sleep(stabilization_delay)
+                # Process events again after delay
+                if self._connection and self._connection.is_open:
+                    self._connection.process_data_events(time_limit=0)
+
             self.logger.info(
-                "Successfully connected to RabbitMQ and declared exchange `%s` "
-                "(type: %s)",
+                "Successfully %s RabbitMQ and declared exchange `%s` (type: %s)",
+                "reconnected to" if is_reconnect else "connected to",
                 self.exchange_name,
                 self.exchange_type,
             )
@@ -94,23 +129,64 @@ class RabbitMQPublisher:
             self._channel = None
             raise
 
+    def _cleanup_connection(self) -> None:
+        """Clean up any existing connection/channel resources.
+
+        Called before reconnecting to ensure clean state.
+        """
+        try:
+            if self._channel:
+                try:
+                    if self._channel.is_open:
+                        self._channel.close()
+                except Exception:
+                    self.logger.debug(
+                        "Error closing channel during cleanup", exc_info=True
+                    )
+                self._channel = None
+        except Exception:
+            self._channel = None
+
+        try:
+            if self._connection:
+                try:
+                    if self._connection.is_open:
+                        self._connection.close()
+                except Exception:
+                    self.logger.debug(
+                        "Error closing connection during cleanup", exc_info=True
+                    )
+                self._connection = None
+        except Exception:
+            self._connection = None
+
     def _ensure_connected(self) -> None:
         """Ensure the connection and channel are open.
 
         If not, it attempts to reconnect. This is useful for checking the state of the
         connection before publishing a message.
         """
-        if (
-            not self._connection
-            or self._connection.is_closed
-            or not self._channel
-            or self._channel.is_closed
-        ):
+        needs_reconnect = False
+        reason = ""
+
+        if not self._connection:
+            needs_reconnect = True
+            reason = "no connection object"
+        elif self._connection.is_closed:
+            needs_reconnect = True
+            reason = "connection is closed"
+        elif not self._channel:
+            needs_reconnect = True
+            reason = "no channel object"
+        elif self._channel.is_closed:
+            needs_reconnect = True
+            reason = "channel is closed"
+
+        if needs_reconnect:
             self.logger.warning(
-                "RabbitMQ connection/channel is closed or not established. "
-                "Reconnecting..."
+                "RabbitMQ connection/channel unavailable (%s). Reconnecting...", reason
             )
-            self._connect()
+            self._connect(is_reconnect=True)
 
     def publish(
         self,
@@ -136,7 +212,7 @@ class RabbitMQPublisher:
         """
         try:
             self._ensure_connected()
-        except (AMQPConnectionError, AMQPChannelError, OSError):
+        except (AMQPConnectionError, AMQPChannelError, StreamLostError, OSError):
             self.logger.exception(
                 "Failed to ensure RabbitMQ connection before publishing"
             )
@@ -157,6 +233,22 @@ class RabbitMQPublisher:
 
         for attempt in range(retry_attempts):
             try:
+                # Process any pending I/O events before publishing to catch stale
+                # connections. This helps detect if the connection died since we last
+                # checked.
+                if self._connection and self._connection.is_open:
+                    self._connection.process_data_events(time_limit=0)
+
+                # Re-verify connection is still good after processing events
+                if (
+                    not self._connection
+                    or self._connection.is_closed
+                    or not self._channel
+                    or self._channel.is_closed
+                ):
+                    msg = "Connection lost after processing events"
+                    raise StreamLostError(msg)  # noqa: TRY301
+
                 # Pika's BlockingChannel.basic_publish with confirms enabled returns
                 # True on ACK, False/None on NACK/timeout However, behavior can be
                 # subtle. Checking for exceptions is more robust for BlockingConnection.
@@ -175,6 +267,11 @@ class RabbitMQPublisher:
                     ),
                     mandatory=True,  # Helps detect unroutable messages
                 )
+
+                # Process events after publish to ensure delivery confirmation
+                if self._connection and self._connection.is_open:
+                    self._connection.process_data_events(time_limit=0)
+
             except UnroutableError:
                 self.logger.exception(
                     "Message to exchange `%s` with routing key `%s` was unroutable. "
@@ -184,51 +281,65 @@ class RabbitMQPublisher:
                 )
                 # Unroutable messages, don't retry without a configuration change
                 return False
-            except (AMQPConnectionError, AMQPChannelError, OSError):
-                self.logger.exception(
-                    "Connection error during publish (attempt %d/%d)",
+            except (
+                StreamLostError,
+                AMQPConnectionError,
+                AMQPChannelError,
+                OSError,
+            ) as e:
+                error_type = type(e).__name__
+                self.logger.warning(
+                    "%s during publish (attempt %d/%d): %s",
+                    error_type,
                     attempt + 1,
                     retry_attempts,
+                    e,
                 )
                 if attempt < retry_attempts - 1:
-                    self.logger.info(
-                        "Retrying publish in %d seconds...", retry_delay_seconds
-                    )
-                    time.sleep(
-                        retry_delay_seconds * (attempt + 1)
-                    )  # Basic exponential backoff
+                    delay = retry_delay_seconds * (attempt + 1)  # Exponential backoff
+                    self.logger.info("Retrying publish in %d seconds...", delay)
+                    time.sleep(delay)
                     try:
-                        # Attempt to re-establish connection before next retry
-                        self._connect()
-                    except (AMQPConnectionError, AMQPChannelError):
+                        # Force reconnection with stabilization delay
+                        self._connect(is_reconnect=True)
+                    except (AMQPConnectionError, AMQPChannelError, StreamLostError):
                         self.logger.exception(
-                            "Failed to reconnect during retry attempt"
+                            "Failed to reconnect during retry attempt %d", attempt + 1
                         )
                         # Continue to next retry attempt if any, or fail
                 else:
-                    self.logger.exception(
-                        "Failed to publish message after %d attempts due to "
-                        "connection/channel issues.",
+                    # Using .error() - exception details already logged above
+                    self.logger.error(  # noqa: TRY400
+                        "Failed to publish message after %d attempts due to %s.",
                         retry_attempts,
+                        error_type,
                     )
                     return False
             except Exception:
                 self.logger.exception(
-                    "An unexpected error occurred during publish (attempt %d/%d)",
+                    "Unexpected error during publish (attempt %d/%d)",
                     attempt + 1,
                     retry_attempts,
                 )
-                self.logger.exception(
-                    "Failed to publish message to exchange `%s` with routing key "
-                    "`%s` after %d attempts.",
-                    self.exchange_name,
-                    routing_key,
-                    retry_attempts,
-                )
-                # Fall through to retry or fail after attempts
+                if attempt >= retry_attempts - 1:
+                    # Using .error() - exception logged above with .exception()
+                    self.logger.error(  # noqa: TRY400
+                        "Failed to publish message to exchange `%s` with routing key "
+                        "`%s` after %d attempts.",
+                        self.exchange_name,
+                        routing_key,
+                        retry_attempts,
+                    )
+                    return False
+                # Try reconnecting for unexpected errors too
+                delay = retry_delay_seconds * (attempt + 1)
+                time.sleep(delay)
+                try:
+                    self._connect(is_reconnect=True)
+                except Exception:
+                    self.logger.exception("Failed to reconnect after unexpected error")
             else:
-                # Assuming success if no exception is raised with confirm_delivery
-                # enabled
+                # Success if no exception raised with confirm_delivery enabled
                 self.logger.info(
                     "Successfully published message to exchange `%s` with routing key"
                     " `%s` (attempt %d)",
@@ -238,16 +349,14 @@ class RabbitMQPublisher:
                 )
                 return True
 
-            if attempt >= retry_attempts - 1:  # If loop finishes without returning True
-                self.logger.error(
-                    "Failed to publish message to exchange `%s` with routing key "
-                    "`%s` after %d attempts.",
-                    self.exchange_name,
-                    routing_key,
-                    retry_attempts,
-                )
-                return False
-        return False  # Should be unreachable if loop logic is correct
+        self.logger.error(
+            "Failed to publish message to exchange `%s` with routing key "
+            "`%s` after %d attempts.",
+            self.exchange_name,
+            routing_key,
+            retry_attempts,
+        )
+        return False
 
     def close(self) -> None:
         """Closes a RabbitMQ connection and channel if they are open.
